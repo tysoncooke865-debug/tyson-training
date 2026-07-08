@@ -21,6 +21,7 @@ CUSTOM_PLAN_FILE = Path("custom_workout_plan.csv")
 TARGETS_FILE = Path("targets.csv")
 PROFILE_FILE = Path("profile.csv")
 ACHIEVEMENT_FILE = Path("achievements.csv")
+AVATAR_FILE = Path("avatar_progression.csv")
 
 def get_supabase_client():
     try:
@@ -56,6 +57,7 @@ SUPABASE_TABLE_SCHEMAS = {
     "achievements": ["achievement_id", "name", "description", "date_unlocked"],
     "targets": ["target_type", "name", "target_value", "unit", "created_at", "notes"],
     "profile": ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"],
+    "avatar_progression": ["date", "level", "rank", "character_class", "build_type", "strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"],
 }
 
 
@@ -1127,6 +1129,277 @@ def render_target_bar(title, current, target, unit, lower_is_better=False):
         """,
         unsafe_allow_html=True,
     )
+
+
+
+# ============================================================
+# AI CHARACTER / AVATAR PROGRESSION
+# ============================================================
+
+def load_avatar_progression():
+    columns = [
+        "date", "level", "rank", "character_class", "build_type",
+        "strength_score", "size_score", "leanness_score", "conditioning_score",
+        "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"
+    ]
+    return df_from_supabase("avatar_progression", AVATAR_FILE, columns)
+
+
+def save_avatar_snapshot(row):
+    ok, err = sb_insert("avatar_progression", row)
+    store_supabase_result("avatar_progression", ok, err)
+    save_csv_backup(
+        AVATAR_FILE,
+        [
+            "date", "level", "rank", "character_class", "build_type",
+            "strength_score", "size_score", "leanness_score", "conditioning_score",
+            "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"
+        ],
+        row=row,
+    )
+
+
+def score_0_100(value, low, high):
+    try:
+        value = float(value)
+        if high <= low:
+            return 0
+        return int(max(0, min(((value - low) / (high - low)) * 100, 100)))
+    except Exception:
+        return 0
+
+
+def latest_physique_rating_values():
+    ratings = load_physique_ratings()
+    if ratings.empty:
+        return {"physique_score": None, "leanness_score": None, "symmetry_score": None, "muscularity_score": None}
+    row = ratings.iloc[-1]
+    out = {}
+    for key in ["physique_score", "leanness_score", "symmetry_score", "muscularity_score"]:
+        try:
+            val = pd.to_numeric(row.get(key, None), errors="coerce")
+            if pd.isna(val):
+                val = None
+        except Exception:
+            val = None
+        out[key] = val
+    return out
+
+
+def safe_num(value, default=0.0):
+    try:
+        if value is None:
+            return default
+        value = float(value)
+        if math.isnan(value) or math.isinf(value):
+            return default
+        return value
+    except Exception:
+        return default
+
+
+def calculate_avatar_stats():
+    df = load_log()
+    summary = workout_summary(df)
+    heat = muscle_heat_map(df)
+
+    latest_bw = latest_bodyweight_value() or summary.get("latest_bw", 0) or 0
+    bf_mid = latest_bodyfat_mid()
+    physique = latest_physique_rating_values()
+    cardio = get_cardio_stats()
+
+    bench = current_exercise_best_1rm("Barbell Bench Press (Strength)")
+    if bench <= 0:
+        bench = max(
+            current_exercise_best_1rm("Barbell Bench Press"),
+            current_exercise_best_1rm("Paused Barbell Bench Press"),
+        )
+
+    squat = current_exercise_best_1rm("Barbell Back Squat")
+    bodyweight = latest_bw if latest_bw and latest_bw > 0 else 77.0
+
+    bench_ratio = bench / bodyweight if bodyweight else 0
+    squat_ratio = squat / bodyweight if bodyweight else 0
+
+    strength_score = int(max(0, min((bench_ratio / 1.5) * 55 + (squat_ratio / 2.0) * 45, 100)))
+
+    muscle_sets = 0
+    if not heat.empty and "sets" in heat.columns:
+        muscle_sets = int(pd.to_numeric(heat["sets"], errors="coerce").fillna(0).sum())
+    size_score = min(100, int(muscle_sets / 12))
+
+    if bf_mid is not None and safe_num(bf_mid, 0) > 0:
+        leanness_score = int(max(0, min(100, 100 - ((safe_num(bf_mid) - 8) * 6.5))))
+    else:
+        ai_lean = physique.get("leanness_score")
+        leanness_score = int(safe_num(ai_lean, 7.5) / 15 * 100)
+
+    total_cardio_minutes = safe_num(cardio.get("minutes", 0), 0)
+    total_distance = safe_num(cardio.get("distance", 0), 0)
+    conditioning_score = int(max(0, min((total_cardio_minutes / 1000) * 70 + (total_distance / 100) * 30, 100)))
+
+    ai_phys_score = safe_num(physique.get("physique_score"), 8.0) / 15 * 100
+    symmetry_score = safe_num(physique.get("symmetry_score"), 8.0) / 15 * 100
+
+    aesthetic_score = int(max(0, min((leanness_score * 0.35) + (size_score * 0.25) + (symmetry_score * 0.20) + (ai_phys_score * 0.20), 100)))
+
+    level = int(summary.get("level", 1))
+    rank = str(summary.get("rank", rank_name(level)))
+
+    if strength_score >= 75 and aesthetic_score >= 70:
+        character_class = "Aesthetic Hybrid"
+    elif leanness_score >= 80:
+        character_class = "Shredded Assassin"
+    elif strength_score >= 80:
+        character_class = "Strength Titan"
+    elif size_score >= 70:
+        character_class = "Mass Builder"
+    elif conditioning_score >= 70:
+        character_class = "Combat Athlete"
+    else:
+        character_class = "Rising Aesthetic"
+
+    if bodyweight >= 85:
+        build_type = "Heavy Frame"
+    elif bodyweight >= 78:
+        build_type = "Athletic Frame"
+    elif bodyweight >= 72:
+        build_type = "Lean Frame"
+    else:
+        build_type = "Cutting Frame"
+
+    weak_focus = "Balanced"
+    if not heat.empty and "muscle" in heat.columns and "sets" in heat.columns:
+        heat_dict = dict(zip(heat["muscle"], heat["sets"]))
+        priority_order = [
+            ("Upper Chest", "Upper chest"),
+            ("Side Delts", "Side delts"),
+            ("Back Width", "Lat width"),
+            ("Rear Delts", "Rear delts"),
+            ("Abs", "Core/abs"),
+            ("Quads", "Legs"),
+        ]
+        lowest = None
+        for muscle, label in priority_order:
+            val = int(heat_dict.get(muscle, 0))
+            if lowest is None or val < lowest[0]:
+                lowest = (val, label)
+        if lowest:
+            weak_focus = lowest[1]
+
+    return {
+        "date": str(date.today()),
+        "level": int(level),
+        "rank": str(rank),
+        "character_class": character_class,
+        "build_type": build_type,
+        "strength_score": int(strength_score),
+        "size_score": int(size_score),
+        "leanness_score": int(leanness_score),
+        "conditioning_score": int(conditioning_score),
+        "aesthetic_score": int(aesthetic_score),
+        "weak_point_focus": weak_focus,
+        "ai_summary": "",
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "bench_e1rm": float(bench),
+        "squat_e1rm": float(squat),
+        "bodyweight": float(bodyweight),
+        "bf_mid": bf_mid,
+    }
+
+
+def avatar_stage(level):
+    level = int(level)
+    if level >= 100:
+        return "☀️ True Adam"
+    if level >= 90:
+        return "👑 Chad"
+    if level >= 75:
+        return "🗿 Chad-Lite"
+    if level >= 60:
+        return "⚡ Elite Physique"
+    if level >= 40:
+        return "💎 Aesthetic Tier"
+    if level >= 25:
+        return "🦾 Athlete"
+    if level >= 10:
+        return "⚔️ Trainee"
+    return "🌱 Rookie"
+
+
+def render_avatar_stat(label, value):
+    value = int(max(0, min(safe_num(value, 0), 100)))
+    st.markdown(
+        f"""
+        <div class="avatar-stat">
+            <div class="avatar-stat-top">
+                <span>{label}</span>
+                <b>{value}</b>
+            </div>
+            <div class="avatar-track">
+                <div class="avatar-fill" style="--avatar-progress:{value}%;"></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def default_avatar_summary(stats):
+    return (
+        f"{stats['character_class']} build at {stats['rank']}. "
+        f"Main focus: {stats['weak_point_focus']}. "
+        f"Current profile leans strength {stats['strength_score']}/100, "
+        f"aesthetic {stats['aesthetic_score']}/100, leanness {stats['leanness_score']}/100."
+    )
+
+
+def run_ai_avatar_analysis(stats, model_name):
+    try:
+        from openai import OpenAI
+    except Exception as e:
+        return None, f"OpenAI package not installed. Error: {e}"
+
+    api_key = None
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+    except Exception:
+        api_key = None
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        return None, "Missing OPENAI_API_KEY."
+
+    client = OpenAI(api_key=api_key)
+
+    prompt = f"""
+You are creating an RPG-style fitness avatar for a male lifter.
+
+Use this data:
+{json.dumps(stats, indent=2)}
+
+Return ONLY valid JSON:
+{{
+  "character_class": "short class name",
+  "build_type": "short build archetype",
+  "weak_point_focus": "single priority",
+  "ai_summary": "2-3 sentence motivational but honest avatar description",
+  "next_evolution": "what must improve to reach the next stage",
+  "training_quest": "one practical training quest for the next 7 days"
+}}
+"""
+
+    try:
+        response = client.responses.create(
+            model=model_name,
+            input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
+        )
+        text = getattr(response, "output_text", None) or str(response)
+        data = json.loads(text.strip().replace("```json", "").replace("```", "").strip())
+        return data, None
+    except Exception as e:
+        return None, f"AI avatar analysis failed: {e}"
+
 
 
 def workout_summary(df):
@@ -3229,7 +3502,7 @@ st.markdown("""
 # iOS STYLE PRIMARY NAVIGATION
 # ============================================================
 
-PRIMARY_PAGES = ["Home", "Today", "Progress", "Physique", "Cardio", "Goals", "Data Manager"]
+PRIMARY_PAGES = ["Home", "Today", "Avatar", "Progress", "Physique", "Cardio", "Goals", "Data Manager"]
 MORE_PAGES = ["Profile", "Measurements", "Achievements", "Body Fat", "Bodyweight", "Routine", "Delete Data"]
 ALL_PAGES = PRIMARY_PAGES + MORE_PAGES
 
@@ -3261,7 +3534,7 @@ st.markdown("""
     <div class="app-title-wrap">
         <div class="app-icon">⚡</div>
         <div>
-            <div class="app-title">Training System</div>
+            <div class="app-title">Tyson Training</div>
             <div class="app-subtitle">Fitness OS</div>
         </div>
     </div>
@@ -3269,10 +3542,11 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-nav_cols = st.columns([1,1,1,1,1,1,1])
+nav_cols = st.columns(len(PRIMARY_PAGES))
 nav_labels = {
     "Home": "🏠 Home",
-    "Today": "🏋️ Workout",
+    "Today": "🏋️ Today",
+    "Avatar": "🧬 Avatar",
     "Progress": "📈 Progress",
     "Physique": "🤖 AI",
     "Cardio": "🫀 Cardio",
@@ -3286,7 +3560,7 @@ for col, page_name in zip(nav_cols, PRIMARY_PAGES):
             st.session_state.active_page = page_name
             st.rerun()
 
-with st.expander("Other Features", expanded=False):
+with st.expander("More pages", expanded=False):
     more_cols = st.columns(4)
     for i, page_name in enumerate(MORE_PAGES):
         with more_cols[i % 4]:
@@ -3308,7 +3582,7 @@ if page == "Home":
     st.markdown("### Snapshot")
     m1, m2, m3, m4 = st.columns(4)
     with m1:
-        compact_metric("Total Sets", summary["total_sets"], "working sets")
+        compact_metric("Total Sets", summary["total_sets"], "deduped working sets")
     with m2:
         compact_metric("Total Reps", summary["total_reps"], "logged reps")
     with m3:
@@ -3751,6 +4025,121 @@ elif page == "Cardio":
         st.dataframe(cardio.sort_values("date", ascending=False), use_container_width=True)
 
 
+
+elif page == "Avatar":
+    page_hero("AI Avatar Progression", "Your physique as a game character — class, build, stats and next evolution.", "RPG Mode")
+
+    stats = calculate_avatar_stats()
+    stage = avatar_stage(stats["level"])
+
+    st.markdown(
+        f"""
+        <div class="avatar-card">
+            <div class="avatar-glow"></div>
+            <div class="avatar-main">
+                <div class="avatar-sigil">🧬</div>
+                <div>
+                    <div class="avatar-name">TYSON</div>
+                    <div class="avatar-class">{stats['character_class']}</div>
+                    <div class="avatar-rank">{stage} • Level {stats['level']}</div>
+                </div>
+            </div>
+            <div class="avatar-build">
+                <span>{stats['build_type']}</span>
+                <span>Focus: {stats['weak_point_focus']}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    c1, c2 = st.columns([1, 1])
+
+    with c1:
+        st.subheader("Character Stats")
+        render_avatar_stat("Strength", stats["strength_score"])
+        render_avatar_stat("Size", stats["size_score"])
+        render_avatar_stat("Leanness", stats["leanness_score"])
+        render_avatar_stat("Conditioning", stats["conditioning_score"])
+        render_avatar_stat("Aesthetic", stats["aesthetic_score"])
+
+    with c2:
+        st.subheader("Current Build")
+        compact_metric("Class", stats["character_class"], "AI/RPG archetype")
+        compact_metric("Build", stats["build_type"], f"BW: {stats.get('bodyweight', 0):.1f}kg")
+        compact_metric("Weak Point", stats["weak_point_focus"], "next focus")
+        compact_metric("Stage", stage, f"Level {stats['level']}")
+
+    st.divider()
+
+    st.subheader("Avatar Summary")
+    latest_avatar = load_avatar_progression()
+    if not latest_avatar.empty and str(latest_avatar.iloc[-1].get("ai_summary", "")).strip():
+        st.write(str(latest_avatar.iloc[-1].get("ai_summary", "")))
+    else:
+        st.write(default_avatar_summary(stats))
+
+    model_name = st.text_input("AI model for avatar analysis", value="gpt-5.1", key="avatar_model")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Generate AI Avatar Analysis", type="primary", use_container_width=True):
+            with st.spinner("Evolving avatar profile..."):
+                ai_data, err = run_ai_avatar_analysis(stats, model_name)
+
+            if err:
+                st.error(err)
+            else:
+                stats["character_class"] = ai_data.get("character_class", stats["character_class"])
+                stats["build_type"] = ai_data.get("build_type", stats["build_type"])
+                stats["weak_point_focus"] = ai_data.get("weak_point_focus", stats["weak_point_focus"])
+                stats["ai_summary"] = ai_data.get("ai_summary", default_avatar_summary(stats))
+                st.session_state["last_avatar_ai"] = ai_data
+                save_avatar_snapshot({k: stats[k] for k in [
+                    "date", "level", "rank", "character_class", "build_type",
+                    "strength_score", "size_score", "leanness_score", "conditioning_score",
+                    "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"
+                ]})
+                st.session_state.just_saved_message = "AVATAR EVOLVED"
+                st.rerun()
+
+    with col_b:
+        if st.button("Save Avatar Snapshot", type="secondary", use_container_width=True):
+            stats["ai_summary"] = default_avatar_summary(stats)
+            save_avatar_snapshot({k: stats[k] for k in [
+                "date", "level", "rank", "character_class", "build_type",
+                "strength_score", "size_score", "leanness_score", "conditioning_score",
+                "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"
+            ]})
+            st.session_state.just_saved_message = "AVATAR SNAPSHOT SAVED"
+            st.rerun()
+
+    ai_last = st.session_state.get("last_avatar_ai", None)
+    if ai_last:
+        st.subheader("Next Evolution")
+        st.info(ai_last.get("next_evolution", "Keep progressing your main weak point."))
+        st.subheader("7-Day Quest")
+        st.success(ai_last.get("training_quest", "Complete your planned sessions and log every set."))
+
+    st.subheader("Avatar Timeline")
+    timeline = load_avatar_progression()
+    if timeline.empty:
+        st.info("No avatar snapshots yet. Save one to start your evolution timeline.")
+    else:
+        st.dataframe(timeline.sort_values("timestamp", ascending=False), use_container_width=True)
+
+        chart_df = timeline.copy()
+        for col in ["strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score"]:
+            chart_df[col] = pd.to_numeric(chart_df[col], errors="coerce").fillna(0)
+
+        st.line_chart(
+            chart_df,
+            x="date",
+            y=["strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score"],
+        )
+
+
+
 elif page == "Progress":
     page_hero("Progress", "Review your lifting history and trend data.", "Analytics")
     if df.empty:
@@ -4171,6 +4560,7 @@ elif page == "Data Manager":
         "achievements": {"achievement_id": "test_" + datetime.now().strftime("%H%M%S"), "name": "Test Achievement", "description": "test insert", "date_unlocked": datetime.now().isoformat(timespec="seconds")},
         "targets": {"target_type": "Test", "name": "Test Target " + datetime.now().strftime("%H%M%S"), "target_value": 1, "unit": "test", "created_at": datetime.now().isoformat(timespec="seconds"), "notes": "test insert"},
         "profile": {"height_cm": 183.5, "bodyweight_kg": 77.0, "bench_e1rm": 100, "squat_e1rm": 140, "training_years": 3, "physique_score": 10, "leanness_score": 10, "base_level": 42, "created_at": datetime.now().isoformat(timespec="seconds")},
+        "avatar_progression": {"date": str(date.today()), "level": 42, "rank": "Aesthetic Tier", "character_class": "Aesthetic Hybrid", "build_type": "Athletic Frame", "strength_score": 70, "size_score": 60, "leanness_score": 65, "conditioning_score": 40, "aesthetic_score": 68, "weak_point_focus": "Side delts", "ai_summary": "Test avatar row", "timestamp": datetime.now().isoformat(timespec="seconds")},
     }
 
     selected_test_table = st.selectbox("Supabase table to test", list(sample_rows.keys()))
@@ -4360,6 +4750,7 @@ elif page == "Data Manager":
                 "achievements.csv": "achievements",
                 "cardio_log.csv": "cardio_log",
                 "profile.csv": "profile",
+                "avatar_progression.csv": "avatar_progression",
             }
             migrated = []
             for file, table in migration_map.items():
@@ -4774,6 +5165,158 @@ section[data-testid="stSidebar"] {
         padding: 18px !important;
         border-radius: 26px !important;
     }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   AVATAR RPG PROGRESSION UI
+============================================================ */
+
+.avatar-card {
+    position: relative;
+    overflow: hidden;
+    padding: 28px;
+    border-radius: 34px;
+    margin: 18px 0 22px 0;
+    background:
+        radial-gradient(circle at 18% 18%, rgba(125,211,252,.25), transparent 32%),
+        linear-gradient(145deg, rgba(15,39,68,.82), rgba(2,6,23,.88));
+    border: 1px solid rgba(56,189,248,.20);
+    box-shadow:
+        0 22px 58px rgba(0,0,0,.32),
+        0 0 42px rgba(56,189,248,.20),
+        inset 0 0 30px rgba(56,189,248,.06);
+    animation: avatarEnter .65s ease both, avatarBreath 4.5s ease-in-out infinite;
+}
+
+@keyframes avatarEnter {
+    from { opacity:0; transform:translateY(14px) scale(.98); filter:blur(8px); }
+    to { opacity:1; transform:translateY(0) scale(1); filter:blur(0); }
+}
+
+@keyframes avatarBreath {
+    0%,100% { box-shadow:0 22px 58px rgba(0,0,0,.32), 0 0 28px rgba(56,189,248,.15); }
+    50% { box-shadow:0 22px 58px rgba(0,0,0,.32), 0 0 56px rgba(56,189,248,.32); }
+}
+
+.avatar-glow {
+    position:absolute;
+    inset:-30%;
+    background: conic-gradient(from 180deg, transparent, rgba(56,189,248,.20), transparent, rgba(14,165,233,.18), transparent);
+    animation: avatarSpin 8s linear infinite;
+    opacity:.55;
+}
+
+@keyframes avatarSpin {
+    from { transform:rotate(0deg); }
+    to { transform:rotate(360deg); }
+}
+
+.avatar-main, .avatar-build {
+    position: relative;
+    z-index: 2;
+}
+
+.avatar-main {
+    display:flex;
+    align-items:center;
+    gap:18px;
+}
+
+.avatar-sigil {
+    width:74px;
+    height:74px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:26px;
+    background:linear-gradient(135deg, #075985, #38bdf8, #7dd3fc);
+    box-shadow:0 0 34px rgba(56,189,248,.45);
+    font-size:38px;
+}
+
+.avatar-name {
+    font-size:2.3rem;
+    font-weight:1000;
+    letter-spacing:-.06em;
+    color:#eaf7ff;
+    text-shadow:0 0 24px rgba(56,189,248,.36);
+}
+
+.avatar-class {
+    font-size:1.05rem;
+    color:#7dd3fc;
+    font-weight:900;
+    letter-spacing:.05em;
+    text-transform:uppercase;
+}
+
+.avatar-rank {
+    margin-top:5px;
+    color:#8fb8d6;
+    font-weight:800;
+}
+
+.avatar-build {
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    margin-top:18px;
+}
+
+.avatar-build span {
+    padding:9px 12px;
+    border-radius:999px;
+    background:rgba(2,6,23,.58);
+    border:1px solid rgba(56,189,248,.18);
+    color:#eaf7ff;
+    font-weight:850;
+}
+
+.avatar-stat {
+    padding:14px 16px;
+    border-radius:22px;
+    margin-bottom:12px;
+    background:linear-gradient(145deg, rgba(15,39,68,.68), rgba(2,6,23,.72));
+    border:1px solid rgba(56,189,248,.12);
+    box-shadow:0 10px 30px rgba(0,0,0,.20), inset 0 0 14px rgba(56,189,248,.035);
+}
+
+.avatar-stat-top {
+    display:flex;
+    justify-content:space-between;
+    color:#eaf7ff;
+    font-weight:900;
+    margin-bottom:8px;
+}
+
+.avatar-track {
+    position:relative;
+    overflow:hidden;
+    height:12px;
+    border-radius:999px;
+    background:rgba(2,6,23,.86);
+    border:1px solid rgba(56,189,248,.12);
+}
+
+.avatar-fill {
+    width:var(--avatar-progress);
+    height:100%;
+    border-radius:999px;
+    background:linear-gradient(90deg, #075985, #38bdf8, #7dd3fc, #38bdf8);
+    background-size:220% 100%;
+    box-shadow:0 0 22px rgba(56,189,248,.55);
+    animation: avatarBar 1.5s linear infinite;
+}
+
+@keyframes avatarBar {
+    from { background-position:0% 0%; }
+    to { background-position:220% 0%; }
 }
 
 </style>
