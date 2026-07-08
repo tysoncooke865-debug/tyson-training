@@ -22,21 +22,19 @@ TARGETS_FILE = Path("targets.csv")
 PROFILE_FILE = Path("profile.csv")
 ACHIEVEMENT_FILE = Path("achievements.csv")
 
-# -----------------------------
-# SUPABASE CONFIG / CSV BACKUP
-# -----------------------------
-@st.cache_resource
 def get_supabase_client():
     try:
         url = st.secrets.get("SUPABASE_URL", None)
         key = st.secrets.get("SUPABASE_KEY", None)
     except Exception:
-        url = None
-        key = None
+        url, key = None, None
+
     url = url or os.getenv("SUPABASE_URL")
     key = key or os.getenv("SUPABASE_KEY")
+
     if not url or not key:
         return None
+
     try:
         return create_client(url, key)
     except Exception:
@@ -47,10 +45,65 @@ def supabase_enabled():
     return get_supabase_client() is not None
 
 
+SUPABASE_TABLE_SCHEMAS = {
+    "workout_log": ["date", "workout", "exercise", "muscle", "set", "weight", "reps", "estimated_1rm", "volume", "notes", "timestamp"],
+    "bodyweight_log": ["date", "bodyweight", "timestamp"],
+    "cardio_log": ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"],
+    "bodyfat_log": ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"],
+    "measurements": ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"],
+    "physique_ratings": ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"],
+    "custom_workout_plan": ["plan_name", "workout", "exercise", "sets", "reps", "muscle", "reason", "day_goal", "timestamp"],
+    "achievements": ["achievement_id", "name", "description", "date_unlocked"],
+    "targets": ["target_type", "name", "target_value", "unit", "created_at", "notes"],
+    "profile": ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"],
+}
+
+
+def clean_supabase_value(v):
+    try:
+        if pd.isna(v):
+            return None
+    except Exception:
+        pass
+
+    if hasattr(v, "item"):
+        try:
+            v = v.item()
+        except Exception:
+            pass
+
+    if isinstance(v, (pd.Timestamp, datetime, date)):
+        return str(v)
+
+    return v
+
+
+def clean_supabase_row(row, table_name):
+    allowed = SUPABASE_TABLE_SCHEMAS.get(table_name, list(row.keys()))
+    clean = {}
+    for k in allowed:
+        if k not in row:
+            continue
+        clean[k] = clean_supabase_value(row.get(k))
+
+    # jsonb columns: accept stringified JSON or Python lists
+    if table_name == "physique_ratings":
+        for key in ["weak_points", "improvements"]:
+            if isinstance(clean.get(key), str):
+                try:
+                    clean[key] = json.loads(clean[key])
+                except Exception:
+                    # Keep string if it is not JSON; diagnostic will reveal if table rejects it
+                    pass
+
+    return clean
+
+
 def sb_select(table_name):
     sb = get_supabase_client()
     if sb is None:
         return None, "Supabase not configured"
+
     try:
         res = sb.table(table_name).select("*").execute()
         return res.data or [], None
@@ -58,47 +111,7 @@ def sb_select(table_name):
         return None, str(e)
 
 
-
-def clean_supabase_row(row, table_name):
-    allowed = {
-        "workout_log": ["date", "workout", "exercise", "muscle", "set", "weight", "reps", "estimated_1rm", "volume", "notes", "timestamp"],
-        "bodyweight_log": ["date", "bodyweight", "timestamp"],
-        "cardio_log": ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"],
-        "bodyfat_log": ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"],
-        "measurements": ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"],
-        "physique_ratings": ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"],
-        "custom_workout_plan": ["plan_name", "workout", "exercise", "sets", "reps", "muscle", "reason", "day_goal", "timestamp"],
-        "achievements": ["achievement_id", "name", "description", "date_unlocked"],
-        "targets": ["target_type", "name", "target_value", "unit", "created_at", "notes"],
-        "profile": ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"],
-    }
-
-    clean = {}
-    for k in allowed.get(table_name, row.keys()):
-        if k not in row:
-            continue
-        v = row.get(k)
-        try:
-            if pd.isna(v):
-                v = None
-        except Exception:
-            pass
-        if hasattr(v, "item"):
-            try:
-                v = v.item()
-            except Exception:
-                pass
-        clean[k] = v
-    return clean
-
-
-
 def sb_insert(table_name, row, show_error=False):
-    """
-    Insert a row into Supabase.
-    show_error=True is used by the Data Manager diagnostic button.
-    Returns (ok, error_message).
-    """
     sb = get_supabase_client()
     if sb is None:
         msg = "Supabase not configured. Check SUPABASE_URL and SUPABASE_KEY in Streamlit Secrets."
@@ -106,42 +119,51 @@ def sb_insert(table_name, row, show_error=False):
             st.error(msg)
         return False, msg
 
-    clean = clean_supabase_row(row, table_name) if "clean_supabase_row" in globals() else dict(row)
+    clean = clean_supabase_row(row, table_name)
 
     try:
         res = sb.table(table_name).insert(clean).execute()
-
         if show_error:
-            st.success(f"✅ Supabase insert succeeded: {table_name}")
+            st.success(f"✅ Insert succeeded: {table_name}")
             try:
                 st.json(res.data)
             except Exception:
                 st.write(res)
-
         return True, None
 
     except Exception as e:
         msg = str(e)
-
         if show_error:
-            st.error(f"❌ Supabase insert failed for {table_name}")
+            st.error(f"❌ Insert failed: {table_name}")
             st.code(msg)
             st.write("Attempted row:")
             st.json(clean)
-
         return False, msg
-
 
 
 def sb_delete_matching(table_name, filters):
     sb = get_supabase_client()
     if sb is None:
         return False, "Supabase not configured"
+
     try:
         query = sb.table(table_name).delete()
         for k, v in filters.items():
             query = query.eq(k, v)
         query.execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def sb_delete_all(table_name):
+    sb = get_supabase_client()
+    if sb is None:
+        return False, "Supabase not configured"
+
+    try:
+        # Delete all rows while avoiding requiring an id column
+        sb.table(table_name).delete().neq(SUPABASE_TABLE_SCHEMAS[table_name][0], "__never_match__").execute()
         return True, None
     except Exception as e:
         return False, str(e)
@@ -156,6 +178,34 @@ def df_from_supabase(table_name, fallback_path, columns):
                 df[col] = ""
         return df
     return load_csv(fallback_path, columns)
+
+
+def save_csv_backup(path, columns, row=None, df=None):
+    current = load_csv(path, columns)
+    if df is not None:
+        df.to_csv(path, index=False)
+        return
+    if row is not None:
+        pd.concat([current, pd.DataFrame([row])], ignore_index=True).to_csv(path, index=False)
+
+
+def store_supabase_result(table_name, ok, err):
+    if ok:
+        st.session_state["last_supabase_write"] = f"Saved to Supabase: {table_name}"
+        st.session_state["last_supabase_error"] = ""
+    else:
+        st.session_state["last_supabase_error"] = f"{table_name} insert failed: {err}"
+
+
+
+# -----------------------------
+# SUPABASE CONFIG / CSV BACKUP
+# -----------------------------
+@st.cache_resource
+
+
+
+
 
 
 def append_csv_backup(path, columns, row):
@@ -555,6 +605,10 @@ def load_csv(path, columns):
     return pd.DataFrame(columns=columns)
 
 
+
+
+
+
 def load_bodyweight_log():
     return df_from_supabase("bodyweight_log", BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
 
@@ -564,13 +618,15 @@ def load_cardio_log():
 
 
 def save_bodyweight_row(row):
-    sb_insert("bodyweight_log", row)
-    append_csv_backup(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"], row)
+    ok, err = sb_insert("bodyweight_log", row)
+    store_supabase_result("bodyweight_log", ok, err)
+    save_csv_backup(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"], row=row)
 
 
 def save_cardio_row(row):
-    sb_insert("cardio_log", row)
-    append_csv_backup(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"], row)
+    ok, err = sb_insert("cardio_log", row)
+    store_supabase_result("cardio_log", ok, err)
+    save_csv_backup(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"], row=row)
 
 
 def normalise_workout_log(df):
@@ -587,8 +643,10 @@ def load_log():
     return normalise_workout_log(df_from_supabase("workout_log", LOG_FILE, columns))
 
 
+
 def load_achievements():
     return df_from_supabase("achievements", ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"])
+
 
 
 def save_achievement(achievement_id):
@@ -596,10 +654,17 @@ def save_achievement(achievement_id):
     if achievement_id in ach["achievement_id"].astype(str).tolist():
         return False
     name, desc = ACHIEVEMENTS[achievement_id]
-    row = {"achievement_id": achievement_id, "name": name, "description": desc, "date_unlocked": datetime.now().isoformat(timespec="seconds")}
-    sb_insert("achievements", row)
-    append_csv_backup(ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"], row)
+    row = {
+        "achievement_id": achievement_id,
+        "name": name,
+        "description": desc,
+        "date_unlocked": datetime.now().isoformat(timespec="seconds"),
+    }
+    ok, err = sb_insert("achievements", row)
+    store_supabase_result("achievements", ok, err)
+    save_csv_backup(ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"], row=row)
     return True
+
 
 
 def estimated_1rm(weight, reps):
@@ -682,8 +747,8 @@ def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
         (df["set"] == int(set_no))
     )
 
-    muscle = infer_muscle_group(exercise) if "infer_muscle_group" in globals() else MUSCLE_MAP.get(exercise, "Other")
     timestamp = datetime.now().isoformat(timespec="seconds")
+    muscle = infer_muscle_group(exercise) if "infer_muscle_group" in globals() else MUSCLE_MAP.get(exercise, "Other")
 
     csv_row = {
         "date": str(workout_date),
@@ -709,10 +774,11 @@ def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
             same_weight = float(old["weight"]) == float(weight)
             same_reps = int(float(old["reps"])) == int(reps)
         except Exception:
-            same_weight = False
-            same_reps = False
+            same_weight = False, False
+
         if same_weight and same_reps:
             return False, False, current_1rm, previous_best
+
         df = df.loc[~mask].copy()
         sb_delete_matching("workout_log", {
             "date": str(workout_date),
@@ -725,11 +791,7 @@ def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
     df.to_csv(LOG_FILE, index=False)
 
     ok, err = sb_insert("workout_log", supabase_row)
-    if ok:
-        st.session_state["last_supabase_write"] = f"Inserted {exercise} set {set_no} into workout_log"
-        st.session_state["last_supabase_error"] = ""
-    else:
-        st.session_state["last_supabase_error"] = f"workout_log insert failed: {err}"
+    store_supabase_result("workout_log", ok, err)
 
     check_achievements()
     return True, is_pr, current_1rm, previous_best
@@ -737,7 +799,9 @@ def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
 
 
 def load_targets():
-    return df_from_supabase("targets", TARGETS_FILE, ["target_type", "name", "target_value", "unit", "created_at", "notes"])
+    columns = ["target_type", "name", "target_value", "unit", "created_at", "notes"]
+    return df_from_supabase("targets", TARGETS_FILE, columns)
+
 
 
 def save_or_update_target(target_type, name, target_value, unit, notes=""):
@@ -746,10 +810,21 @@ def save_or_update_target(target_type, name, target_value, unit, notes=""):
         df["target_type"] = df["target_type"].astype(str)
         df["name"] = df["name"].astype(str)
         df = df.loc[~((df["target_type"] == str(target_type)) & (df["name"] == str(name)))].copy()
-    row = {"target_type": target_type, "name": name, "target_value": float(target_value), "unit": unit, "created_at": datetime.now().isoformat(timespec="seconds"), "notes": notes}
+
+    row = {
+        "target_type": target_type,
+        "name": name,
+        "target_value": float(target_value),
+        "unit": unit,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "notes": notes,
+    }
+
     sb_delete_matching("targets", {"target_type": str(target_type), "name": str(name)})
-    sb_insert("targets", row)
+    ok, err = sb_insert("targets", row)
+    store_supabase_result("targets", ok, err)
     pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(TARGETS_FILE, index=False)
+
 
 
 def get_target(target_type, name):
@@ -773,12 +848,25 @@ def load_profile():
     return df_from_supabase("profile", PROFILE_FILE, columns)
 
 
+
 def save_profile(height_cm, bodyweight_kg, bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score):
     base_level = calculate_starting_level(bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score)
-    row = {"height_cm": height_cm, "bodyweight_kg": bodyweight_kg, "bench_e1rm": bench_e1rm, "squat_e1rm": squat_e1rm, "training_years": training_years, "physique_score": physique_score, "leanness_score": leanness_score, "base_level": base_level, "created_at": datetime.now().isoformat(timespec="seconds")}
-    sb_insert("profile", row)
+    row = {
+        "height_cm": height_cm,
+        "bodyweight_kg": bodyweight_kg,
+        "bench_e1rm": bench_e1rm,
+        "squat_e1rm": squat_e1rm,
+        "training_years": training_years,
+        "physique_score": physique_score,
+        "leanness_score": leanness_score,
+        "base_level": base_level,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    ok, err = sb_insert("profile", row)
+    store_supabase_result("profile", ok, err)
     pd.DataFrame([row]).to_csv(PROFILE_FILE, index=False)
     return base_level
+
 
 
 def get_base_level():
@@ -1084,9 +1172,12 @@ def load_measurements():
     return df_from_supabase("measurements", MEASUREMENTS_FILE, columns)
 
 
+
 def save_measurements(row):
-    sb_insert("measurements", row)
-    append_csv_backup(MEASUREMENTS_FILE, ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"], row)
+    ok, err = sb_insert("measurements", row)
+    store_supabase_result("measurements", ok, err)
+    save_csv_backup(MEASUREMENTS_FILE, ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"], row=row)
+
 
 
 def latest_measurements():
@@ -1101,16 +1192,12 @@ def load_physique_ratings():
     return df_from_supabase("physique_ratings", PHYSIQUE_RATING_FILE, columns)
 
 
+
 def save_physique_rating(row):
-    sb_row = row.copy()
-    for key in ["weak_points", "improvements"]:
-        try:
-            if isinstance(sb_row.get(key), str):
-                sb_row[key] = json.loads(sb_row[key])
-        except Exception:
-            pass
-    sb_insert("physique_ratings", sb_row)
-    append_csv_backup(PHYSIQUE_RATING_FILE, ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"], row)
+    ok, err = sb_insert("physique_ratings", row)
+    store_supabase_result("physique_ratings", ok, err)
+    save_csv_backup(PHYSIQUE_RATING_FILE, ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"], row=row)
+
 
 
 def encode_uploaded_image(uploaded_file):
@@ -1300,34 +1387,55 @@ def save_ai_custom_plan(ai_plan):
     rows = []
     for day in ai_plan.get("days", []):
         for ex in day.get("exercises", []):
-            exercise_name = ex.get("exercise", "")
-            rows.append({"workout": day.get("day", ""), "exercise": exercise_name, "sets": ex.get("sets", ""), "reps": ex.get("reps", ""), "muscle": infer_muscle_group(exercise_name) if "infer_muscle_group" in globals() else "", "reason": ex.get("reason", ""), "day_goal": day.get("goal", ""), "plan_name": ai_plan.get("plan_name", "AI Custom Plan"), "timestamp": datetime.now().isoformat(timespec="seconds")})
+            exercise = ex.get("exercise", "")
+            rows.append({
+                "workout": day.get("day", ""),
+                "exercise": exercise,
+                "sets": ex.get("sets", ""),
+                "reps": ex.get("reps", ""),
+                "muscle": infer_muscle_group(exercise) if "infer_muscle_group" in globals() else "",
+                "reason": ex.get("reason", ""),
+                "day_goal": day.get("goal", ""),
+                "plan_name": ai_plan.get("plan_name", "AI Custom Plan"),
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+
     if not rows:
         return False
-    sb = get_supabase_client()
-    if sb is not None:
-        try:
-            sb.table("custom_workout_plan").delete().neq("exercise", "__never_match__").execute()
-            sb.table("custom_workout_plan").insert(rows).execute()
-        except Exception:
-            pass
+
+    sb_delete_all("custom_workout_plan")
+    for row in rows:
+        ok, err = sb_insert("custom_workout_plan", row)
+        store_supabase_result("custom_workout_plan", ok, err)
+
     pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
     return True
+
 
 
 def save_fallback_custom_plan(plan):
     rows = []
     for workout, exercises in plan.items():
         for exercise, sets, reps in exercises:
-            rows.append({"workout": workout, "exercise": exercise, "sets": sets, "reps": reps, "muscle": infer_muscle_group(exercise) if "infer_muscle_group" in globals() else "", "reason": "Fallback weak-point aesthetic plan", "day_goal": "Aesthetic development", "plan_name": "Fallback Aesthetic Weakpoint Plan", "timestamp": datetime.now().isoformat(timespec="seconds")})
-    sb = get_supabase_client()
-    if sb is not None:
-        try:
-            sb.table("custom_workout_plan").delete().neq("exercise", "__never_match__").execute()
-            sb.table("custom_workout_plan").insert(rows).execute()
-        except Exception:
-            pass
+            rows.append({
+                "workout": workout,
+                "exercise": exercise,
+                "sets": sets,
+                "reps": reps,
+                "muscle": infer_muscle_group(exercise) if "infer_muscle_group" in globals() else "",
+                "reason": "Fallback weak-point aesthetic plan",
+                "day_goal": "Aesthetic development",
+                "plan_name": "Fallback Aesthetic Weakpoint Plan",
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+
+    sb_delete_all("custom_workout_plan")
+    for row in rows:
+        ok, err = sb_insert("custom_workout_plan", row)
+        store_supabase_result("custom_workout_plan", ok, err)
+
     pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
+
 
 
 def generate_custom_plan_from_data(weak_points=None, priorities=None, goal="Aesthetic / lean bulk"):
@@ -1418,9 +1526,12 @@ def load_custom_plan():
     return df_from_supabase("custom_workout_plan", CUSTOM_PLAN_FILE, columns)
 
 
+
 def save_bodyfat_estimate(row):
-    sb_insert("bodyfat_log", row)
-    append_csv_backup(BODYFAT_FILE, ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"], row)
+    ok, err = sb_insert("bodyfat_log", row)
+    store_supabase_result("bodyfat_log", ok, err)
+    save_csv_backup(BODYFAT_FILE, ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"], row=row)
+
 
 
 def bodyfat_outputs(weight_kg, bf_percent, target_bf=10.0):
@@ -1570,6 +1681,7 @@ def navy_body_fat_male(height_cm, waist_cm, neck_cm):
 def load_bodyfat_log():
     columns = ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"]
     return df_from_supabase("bodyfat_log", BODYFAT_FILE, columns)
+
 
 
 def get_bodyfat_stats():
@@ -3477,40 +3589,49 @@ elif page == "Data Manager":
     if supabase_enabled():
         st.success("Supabase client configured.")
     else:
-        st.error("Supabase client not configured.")
+        st.error("Supabase client not configured. Check Streamlit Secrets.")
 
     if st.session_state.get("last_supabase_write"):
         st.success(st.session_state.get("last_supabase_write"))
     if st.session_state.get("last_supabase_error"):
         st.error(st.session_state.get("last_supabase_error"))
 
+    sample_rows = {
+        "workout_log": {"date": str(date.today()), "workout": "Supabase Test", "exercise": "Connection Test", "muscle": "Test", "set": 1, "weight": 1, "reps": 1, "estimated_1rm": 1, "volume": 1, "notes": "test insert", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "bodyweight_log": {"date": str(date.today()), "bodyweight": 77.0, "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "cardio_log": {"date": str(date.today()), "type": "Test", "minutes": 1, "distance_km": 0.1, "incline": 0, "speed": 1, "calories": 1, "notes": "test insert", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "bodyfat_log": {"date": str(date.today()), "method": "Test", "bodyweight": 77.0, "height_cm": 183.5, "waist_cm": 0, "neck_cm": 0, "bf_low": 12, "bf_high": 14, "bf_mid": 13, "confidence": "test", "notes": "test insert", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "measurements": {"date": str(date.today()), "bodyweight": 77.0, "wrist_cm": 0, "forearm_cm": 0, "bicep_cm": 0, "chest_cm": 0, "waist_cm": 0, "hips_cm": 0, "thigh_cm": 0, "calf_cm": 0, "shoulders_cm": 0, "neck_cm": 0, "notes": "test insert", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "physique_ratings": {"date": str(date.today()), "physique_score": 1, "leanness_score": 1, "symmetry_score": 1, "muscularity_score": 1, "confidence": "test", "weak_points": ["test"], "improvements": ["test"], "summary": "test insert", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "custom_workout_plan": {"plan_name": "Test Plan", "workout": "Test Day", "exercise": "Test Exercise", "sets": 1, "reps": "1", "muscle": "Test", "reason": "test insert", "day_goal": "test", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "achievements": {"achievement_id": "test_" + datetime.now().strftime("%H%M%S"), "name": "Test Achievement", "description": "test insert", "date_unlocked": datetime.now().isoformat(timespec="seconds")},
+        "targets": {"target_type": "Test", "name": "Test Target " + datetime.now().strftime("%H%M%S"), "target_value": 1, "unit": "test", "created_at": datetime.now().isoformat(timespec="seconds"), "notes": "test insert"},
+        "profile": {"height_cm": 183.5, "bodyweight_kg": 77.0, "bench_e1rm": 100, "squat_e1rm": 140, "training_years": 3, "physique_score": 10, "leanness_score": 10, "base_level": 42, "created_at": datetime.now().isoformat(timespec="seconds")},
+    }
+
+    selected_test_table = st.selectbox("Supabase table to test", list(sample_rows.keys()))
+
     col_a, col_b = st.columns(2)
     with col_a:
-        if st.button("Test Supabase Insert", type="primary"):
-            test_row = {
-                "date": str(date.today()),
-                "workout": "Supabase Test",
-                "exercise": "Connection Test",
-                "muscle": "Test",
-                "set": 1,
-                "weight": 1,
-                "reps": 1,
-                "estimated_1rm": 1,
-                "volume": 1,
-                "notes": "test insert from app",
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-            }
-            sb_insert("workout_log", test_row, show_error=True)
+        if st.button("Test Selected Table Insert", type="primary"):
+            sb_insert(selected_test_table, sample_rows[selected_test_table], show_error=True)
 
     with col_b:
-        if st.button("Read Supabase Workout Rows"):
-            data, err = sb_select("workout_log")
+        if st.button("Read Selected Table Rows"):
+            data, err = sb_select(selected_test_table)
             if err:
                 st.error(err)
             else:
-                st.write(f"Rows found in Supabase workout_log: {len(data)}")
+                st.write(f"Rows found in Supabase {selected_test_table}: {len(data)}")
                 if data:
                     st.dataframe(pd.DataFrame(data).tail(10), use_container_width=True)
+
+    if st.button("Run All Supabase Insert Tests"):
+        results = []
+        for table, row in sample_rows.items():
+            ok, err = sb_insert(table, row)
+            results.append({"table": table, "ok": ok, "error": err or ""})
+        st.dataframe(pd.DataFrame(results), use_container_width=True)
 
     st.subheader("Detected Data Files")
 
