@@ -528,6 +528,39 @@ def render_target_bar(
         unsafe_allow_html=True,
     )
 
+def current_exercise_best_1rm(exercise_name):
+    df = load_log()
+
+    if df.empty:
+        return 0
+
+    df = normalise_workout_log(df)
+
+    ex = df[df["exercise"] == exercise_name].copy()
+
+    if ex.empty:
+        return 0
+
+    ex["weight"] = pd.to_numeric(
+        ex["weight"],
+        errors="coerce"
+    ).fillna(0)
+
+    ex["reps"] = pd.to_numeric(
+        ex["reps"],
+        errors="coerce"
+    ).fillna(0)
+
+    ex["estimated_1rm"] = ex.apply(
+        lambda x: estimated_1rm(
+            float(x["weight"]),
+            int(x["reps"])
+        ),
+        axis=1
+    )
+
+    return float(ex["estimated_1rm"].max())
+
 def workout_summary(df):
     df = normalise_workout_log(df.copy())
     if df.empty:
