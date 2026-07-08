@@ -61,6 +61,18 @@ SUPABASE_TABLE_SCHEMAS = {
 }
 
 
+
+def clear_data_cache():
+    try:
+        cached_sb_select.clear()
+    except Exception:
+        pass
+    try:
+        cached_csv_read.clear()
+    except Exception:
+        pass
+
+
 def is_bad_number(v):
     try:
         if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
@@ -142,16 +154,29 @@ def clean_supabase_row(row, table_name):
 
 
 
-def sb_select(table_name):
+@st.cache_data(ttl=20, show_spinner=False)
+def cached_sb_select(table_name, limit_rows=2500):
     sb = get_supabase_client()
     if sb is None:
         return None, "Supabase not configured"
 
     try:
-        res = sb.table(table_name).select("*").execute()
+        # Most recent rows first where timestamp/created_at exists.
+        try:
+            res = sb.table(table_name).select("*").order("timestamp", desc=True).limit(limit_rows).execute()
+        except Exception:
+            try:
+                res = sb.table(table_name).select("*").order("created_at", desc=True).limit(limit_rows).execute()
+            except Exception:
+                res = sb.table(table_name).select("*").limit(limit_rows).execute()
         return res.data or [], None
     except Exception as e:
         return None, str(e)
+
+
+def sb_select(table_name):
+    return cached_sb_select(table_name)
+
 
 
 def sb_insert(table_name, row, show_error=False):
@@ -166,6 +191,7 @@ def sb_insert(table_name, row, show_error=False):
 
     try:
         res = sb.table(table_name).insert(clean).execute()
+        clear_data_cache()
         if show_error:
             st.success(f"✅ Insert succeeded: {table_name}")
             try:
@@ -195,9 +221,11 @@ def sb_delete_matching(table_name, filters):
         for k, v in filters.items():
             query = query.eq(k, v)
         query.execute()
+        clear_data_cache()
         return True, None
     except Exception as e:
         return False, str(e)
+
 
 
 def sb_delete_all(table_name):
@@ -206,11 +234,12 @@ def sb_delete_all(table_name):
         return False, "Supabase not configured"
 
     try:
-        # Delete all rows while avoiding requiring an id column
         sb.table(table_name).delete().neq(SUPABASE_TABLE_SCHEMAS[table_name][0], "__never_match__").execute()
+        clear_data_cache()
         return True, None
     except Exception as e:
         return False, str(e)
+
 
 
 def df_from_supabase(table_name, fallback_path, columns):
@@ -220,17 +249,32 @@ def df_from_supabase(table_name, fallback_path, columns):
         for col in columns:
             if col not in df.columns:
                 df[col] = ""
+        # For workout logs, de-dupe early to reduce downstream workload.
+        if table_name == "workout_log" and not df.empty:
+            if "set" in df.columns:
+                df["set"] = pd.to_numeric(df["set"], errors="coerce").fillna(0).astype(int)
+            possible = [c for c in ["date", "workout", "exercise", "set"] if c in df.columns]
+            if len(possible) == 4:
+                sort_col = "timestamp" if "timestamp" in df.columns else possible[0]
+                df = df.sort_values(sort_col, ascending=True).drop_duplicates(
+                    subset=possible,
+                    keep="last"
+                ).reset_index(drop=True)
         return df
     return load_csv(fallback_path, columns)
+
 
 
 def save_csv_backup(path, columns, row=None, df=None):
     current = load_csv(path, columns)
     if df is not None:
         df.to_csv(path, index=False)
+        clear_data_cache()
         return
     if row is not None:
         pd.concat([current, pd.DataFrame([row])], ignore_index=True).to_csv(path, index=False)
+        clear_data_cache()
+
 
 
 def store_supabase_result(table_name, ok, err):
@@ -636,7 +680,10 @@ ACHIEVEMENTS = {
     "true_adam": ("☀️ True Adam", "Reached level 100."),
 }
 
-def load_csv(path, columns):
+@st.cache_data(ttl=20, show_spinner=False)
+def cached_csv_read(path_str, columns_tuple, modified_time):
+    path = Path(path_str)
+    columns = list(columns_tuple)
     if path.exists():
         try:
             df = pd.read_csv(path)
@@ -649,7 +696,12 @@ def load_csv(path, columns):
     return pd.DataFrame(columns=columns)
 
 
-
+def load_csv(path, columns):
+    try:
+        modified_time = path.stat().st_mtime if path.exists() else 0
+    except Exception:
+        modified_time = 0
+    return cached_csv_read(str(path), tuple(columns), modified_time).copy()
 
 
 
@@ -3548,6 +3600,8 @@ ALL_PAGES = PRIMARY_PAGES + MORE_PAGES
 if "active_page" not in st.session_state:
     st.session_state.active_page = "Home"
 
+PERFORMANCE_MODE = st.sidebar.toggle("Performance mode", value=True, help="Keeps the glow style but reduces the heaviest animations/database refresh lag.")
+
 st.sidebar.markdown("""
 <div class="side-brand">
     <div class="side-logo">⚡</div>
@@ -3573,7 +3627,7 @@ st.markdown("""
     <div class="app-title-wrap">
         <div class="app-icon">⚡</div>
         <div>
-            <div class="app-title">Training Tracker</div>
+            <div class="app-title">Tyson Training</div>
             <div class="app-subtitle">Fitness OS</div>
         </div>
     </div>
@@ -3584,7 +3638,7 @@ st.markdown("""
 nav_cols = st.columns(len(PRIMARY_PAGES))
 nav_labels = {
     "Home": "🏠 Home",
-    "Today": "🏋️ Workout",
+    "Today": "🏋️ Today",
     "Avatar": "🧬 Avatar",
     "Progress": "📈 Progress",
     "Physique": "🤖 AI",
@@ -3599,7 +3653,7 @@ for col, page_name in zip(nav_cols, PRIMARY_PAGES):
             st.session_state.active_page = page_name
             st.rerun()
 
-with st.expander("Other Features", expanded=False):
+with st.expander("More pages", expanded=False):
     more_cols = st.columns(4)
     for i, page_name in enumerate(MORE_PAGES):
         with more_cols[i % 4]:
@@ -3610,10 +3664,42 @@ with st.expander("Other Features", expanded=False):
 
 page = st.session_state.active_page
 
+if PERFORMANCE_MODE:
+    st.markdown("""
+    <style>
+    /* Balanced performance mode: keeps the aesthetic, reduces only expensive effects */
+    .avatar-glow {
+        opacity: .18 !important;
+        animation-duration: 30s !important;
+    }
+    [data-testid="stAppViewContainer"] {
+        animation-duration: 36s !important;
+    }
+    .hero-panel,
+    .avatar-card {
+        animation-duration: .35s, 7s !important;
+    }
+    .progress-fill,
+    .avatar-fill {
+        animation-duration: 2.6s !important;
+    }
+    .mobile-app-topbar {
+        backdrop-filter: blur(6px) !important;
+        -webkit-backdrop-filter: blur(6px) !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+ui_toast_area()
+
 df = load_log()
 
 # Unlock any achievements already earned from existing data/profile.
-check_achievements()
+# Cached/throttled so it does not make every page rerun laggy.
+if "achievements_checked_this_session" not in st.session_state:
+    check_achievements()
+    st.session_state.achievements_checked_this_session = True
 
 if page == "Home":
     page_hero("Command Centre", "Your daily training cockpit — strength, progress, rank and system status.", "Command OS")
@@ -3621,7 +3707,7 @@ if page == "Home":
     st.markdown("### Snapshot")
     m1, m2, m3, m4 = st.columns(4)
     with m1:
-        compact_metric("Total Sets", summary["total_sets"], "working sets")
+        compact_metric("Total Sets", summary["total_sets"], "deduped working sets")
     with m2:
         compact_metric("Total Reps", summary["total_reps"], "logged reps")
     with m3:
@@ -4578,6 +4664,13 @@ elif page == "Data Manager":
         st.rerun()
 
 
+    st.subheader("Performance")
+    if st.button("Clear App Cache / Refresh Data", type="secondary"):
+        clear_data_cache()
+        st.session_state.pop("achievements_checked_this_session", None)
+        st.success("Cache cleared. Fresh data will load now.")
+        st.rerun()
+
     st.subheader("Supabase Diagnostics")
     if supabase_enabled():
         st.success("Supabase client configured.")
@@ -5359,6 +5452,57 @@ st.markdown("""
     to { background-position:220% 0%; }
 }
 
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   PERFORMANCE MODE OVERRIDE
+   Keeps glow, reduces expensive animations and blur.
+============================================================ */
+
+[data-testid="stAppViewContainer"] {
+    animation-duration: 28s !important;
+}
+
+.hero-panel,
+.avatar-card,
+.mission-card,
+.nw-exercise-card,
+.compact-metric,
+.section-card,
+div[data-testid="stMetric"] {
+    animation-duration: .35s !important;
+}
+
+.avatar-glow {
+    opacity: .28 !important;
+    animation-duration: 18s !important;
+}
+
+.mobile-app-topbar {
+    backdrop-filter: blur(8px) !important;
+    -webkit-backdrop-filter: blur(8px) !important;
+}
+
+.progress-fill,
+.avatar-fill {
+    animation-duration: 2.8s !important;
+}
+
+.floating-toast {
+    pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: .001s !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001s !important;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
