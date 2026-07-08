@@ -3225,57 +3225,77 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-NAV_GROUPS = {
-    "Command": ["Home", "Today", "Progress"],
-    "AI Coach": ["Physique", "Body Fat", "Goals"],
-    "Tracking": ["Cardio", "Bodyweight", "Measurements"],
-    "System": ["Achievements", "Data Manager", "Routine", "Delete Data"],
-}
+# ============================================================
+# iOS STYLE PRIMARY NAVIGATION
+# ============================================================
+
+PRIMARY_PAGES = ["Home", "Today", "Progress", "Physique", "Cardio", "Goals", "Data Manager"]
+MORE_PAGES = ["Profile", "Measurements", "Achievements", "Body Fat", "Bodyweight", "Routine", "Delete Data"]
+ALL_PAGES = PRIMARY_PAGES + MORE_PAGES
+
+if "active_page" not in st.session_state:
+    st.session_state.active_page = "Home"
 
 st.sidebar.markdown("""
 <div class="side-brand">
     <div class="side-logo">⚡</div>
     <div>
         <div class="side-title">TYSON TRAINING</div>
-        <div class="side-sub">Command OS</div>
+        <div class="side-sub">iOS Fitness OS</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-nav_group = st.sidebar.selectbox("Section", list(NAV_GROUPS.keys()), key="nav_group")
-page = st.sidebar.radio("Page", NAV_GROUPS[nav_group], key="nav_page")
+# Sidebar remains as a backup only.
+sidebar_page = st.sidebar.selectbox(
+    "Backup menu",
+    ALL_PAGES,
+    index=ALL_PAGES.index(st.session_state.active_page) if st.session_state.active_page in ALL_PAGES else 0,
+)
+if sidebar_page != st.session_state.active_page:
+    st.session_state.active_page = sidebar_page
+    st.rerun()
 
-st.sidebar.markdown("---")
-st.sidebar.caption("Quick jump")
-quick_cols = st.sidebar.columns(2)
-with quick_cols[0]:
-    if st.button("🏋️ Today", use_container_width=True):
-        st.session_state.nav_group = "Command"
-        st.session_state.nav_page = "Today"
-        st.rerun()
-with quick_cols[1]:
-    if st.button("📂 Data", use_container_width=True):
-        st.session_state.nav_group = "System"
-        st.session_state.nav_page = "Data Manager"
-        st.rerun()
+st.markdown("""
+<div class="mobile-app-topbar">
+    <div class="app-title-wrap">
+        <div class="app-icon">⚡</div>
+        <div>
+            <div class="app-title">Tyson Training</div>
+            <div class="app-subtitle">Fitness OS</div>
+        </div>
+    </div>
+    <div class="app-status-pill">Live</div>
+</div>
+""", unsafe_allow_html=True)
 
-st.markdown(f'<div class="page-transition">⚡ {page} module loaded</div>', unsafe_allow_html=True)
+nav_cols = st.columns([1,1,1,1,1,1,1])
+nav_labels = {
+    "Home": "🏠 Home",
+    "Today": "🏋️ Today",
+    "Progress": "📈 Progress",
+    "Physique": "🤖 AI",
+    "Cardio": "🫀 Cardio",
+    "Goals": "🎯 Goals",
+    "Data Manager": "📂 Data",
+}
+for col, page_name in zip(nav_cols, PRIMARY_PAGES):
+    with col:
+        button_type = "primary" if st.session_state.active_page == page_name else "secondary"
+        if st.button(nav_labels[page_name], key=f"top_nav_{page_name}", use_container_width=True, type=button_type):
+            st.session_state.active_page = page_name
+            st.rerun()
 
-for key in ["just_saved_message", "pr_message", "achievement_message"]:
-    if key not in st.session_state:
-        st.session_state[key] = ""
+with st.expander("More pages", expanded=False):
+    more_cols = st.columns(4)
+    for i, page_name in enumerate(MORE_PAGES):
+        with more_cols[i % 4]:
+            button_type = "primary" if st.session_state.active_page == page_name else "secondary"
+            if st.button(page_name, key=f"more_nav_{page_name}", use_container_width=True, type=button_type):
+                st.session_state.active_page = page_name
+                st.rerun()
 
-if st.session_state.just_saved_message:
-    st.markdown(f"""<div class="save-banner"><div class="save-banner-title">⚡ {st.session_state.just_saved_message}</div><div class="save-banner-sub">Training log synced • progression updated</div></div>""", unsafe_allow_html=True)
-    st.session_state.just_saved_message = ""
-
-if st.session_state.pr_message:
-    st.markdown(f"""<div class="pr-banner"><div class="save-banner-title">🏆 {st.session_state.pr_message}</div><div class="save-banner-sub">New performance record detected</div></div>""", unsafe_allow_html=True)
-    st.session_state.pr_message = ""
-
-if st.session_state.achievement_message:
-    st.markdown(f"""<div class="achievement-banner"><div class="save-banner-title">🎖 ACHIEVEMENT UNLOCKED</div><div class="save-banner-sub">{st.session_state.achievement_message}</div></div>""", unsafe_allow_html=True)
-    st.session_state.achievement_message = ""
+page = st.session_state.active_page
 
 df = load_log()
 
@@ -4449,3 +4469,313 @@ elif page == "Routine":
         else:
             for exercise, sets, reps in exercises:
                 st.write(f"**{exercise}** — {sets} sets × {reps}")
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   IOS FITNESS APP UI — FINAL OVERRIDE
+   Visible top navigation, softer cards, stronger dynamic glow.
+============================================================ */
+
+:root {
+    --ios-bg: #020617;
+    --ios-card: rgba(10, 22, 42, 0.78);
+    --ios-card2: rgba(15, 39, 68, 0.72);
+    --ios-blue: #38bdf8;
+    --ios-blue2: #0ea5e9;
+    --ios-glow: rgba(56, 189, 248, 0.50);
+    --ios-text: #eaf7ff;
+    --ios-muted: #8fb8d6;
+}
+
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(circle at 10% 0%, rgba(56,189,248,.28), transparent 28%),
+        radial-gradient(circle at 90% 10%, rgba(14,165,233,.22), transparent 30%),
+        radial-gradient(circle at 50% 96%, rgba(56,189,248,.14), transparent 36%),
+        linear-gradient(135deg, #020617, #071426 46%, #020617) !important;
+    background-size: 170% 170% !important;
+    animation: iosBgMove 15s ease infinite !important;
+}
+
+@keyframes iosBgMove {
+    0% { background-position: 0% 25%; }
+    50% { background-position: 100% 75%; }
+    100% { background-position: 0% 25%; }
+}
+
+[data-testid="stMainBlockContainer"] {
+    max-width: 1180px !important;
+    padding-top: 1.0rem !important;
+    padding-bottom: 5rem !important;
+}
+
+/* Main visible app header */
+.mobile-app-topbar {
+    position: sticky;
+    top: 0.35rem;
+    z-index: 999;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding: 14px 16px;
+    margin: 0 0 12px 0;
+    border-radius: 28px;
+    background: rgba(2, 6, 23, 0.72);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid rgba(56,189,248,.16);
+    box-shadow:
+        0 18px 44px rgba(0,0,0,.28),
+        0 0 28px rgba(56,189,248,.12);
+}
+
+.app-title-wrap {
+    display:flex;
+    align-items:center;
+    gap:12px;
+}
+
+.app-icon {
+    width:42px;
+    height:42px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:16px;
+    background: linear-gradient(135deg, #075985, #38bdf8);
+    box-shadow: 0 0 24px rgba(56,189,248,.38);
+    font-size:22px;
+}
+
+.app-title {
+    font-size:1.15rem;
+    font-weight:950;
+    color:#eaf7ff;
+    letter-spacing:-.03em;
+}
+
+.app-subtitle {
+    color:#7dd3fc;
+    font-size:.78rem;
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:.12em;
+}
+
+.app-status-pill {
+    padding:8px 12px;
+    border-radius:999px;
+    color:#02131f;
+    font-weight:950;
+    background:linear-gradient(90deg, #7dd3fc, #38bdf8);
+    box-shadow:0 0 22px rgba(56,189,248,.24);
+}
+
+/* Turn Streamlit buttons into iOS nav pills */
+div[data-testid="column"] .stButton button {
+    min-height: 46px !important;
+}
+
+.stButton button {
+    border-radius: 999px !important;
+    border: 1px solid rgba(56,189,248,.13) !important;
+    background:
+        linear-gradient(145deg, rgba(15,39,68,.80), rgba(2,6,23,.82)) !important;
+    color: #dff7ff !important;
+    font-weight: 900 !important;
+    box-shadow:
+        0 8px 24px rgba(0,0,0,.22),
+        inset 0 0 12px rgba(56,189,248,.04) !important;
+    transition: all .20s ease !important;
+}
+
+.stButton button[kind="primary"],
+.stButton button:focus {
+    color: #02131f !important;
+    background: linear-gradient(90deg, #7dd3fc, #38bdf8, #0ea5e9) !important;
+    box-shadow:
+        0 10px 28px rgba(56,189,248,.34),
+        0 0 26px rgba(56,189,248,.28) !important;
+}
+
+.stButton button:hover {
+    transform: translateY(-2px) scale(1.01) !important;
+    border-color: rgba(56,189,248,.34) !important;
+    box-shadow: 0 16px 34px rgba(0,0,0,.28), 0 0 30px rgba(56,189,248,.24) !important;
+}
+
+/* Hero cards */
+.hero-panel {
+    border-radius: 32px !important;
+    padding: 22px 24px !important;
+    margin-top: 12px !important;
+    background:
+        linear-gradient(135deg, rgba(15,39,68,.76), rgba(2,6,23,.78)),
+        radial-gradient(circle at 12% 25%, rgba(56,189,248,.22), transparent 30%) !important;
+    border: 1px solid rgba(56,189,248,.16) !important;
+    box-shadow:
+        0 20px 54px rgba(0,0,0,.30),
+        0 0 34px rgba(56,189,248,.15),
+        inset 0 0 28px rgba(56,189,248,.04) !important;
+    animation: iosHeroIn .55s ease both, iosHeroBreath 5s ease-in-out infinite !important;
+}
+
+@keyframes iosHeroIn {
+    from { opacity:0; transform:translateY(-10px) scale(.985); filter: blur(6px); }
+    to { opacity:1; transform:translateY(0) scale(1); filter: blur(0); }
+}
+
+@keyframes iosHeroBreath {
+    0%,100% { box-shadow:0 20px 54px rgba(0,0,0,.30), 0 0 24px rgba(56,189,248,.12); }
+    50% { box-shadow:0 20px 54px rgba(0,0,0,.30), 0 0 44px rgba(56,189,248,.24); }
+}
+
+.hero-title {
+    font-size: clamp(1.55rem, 4vw, 2.15rem) !important;
+    line-height: 1.05 !important;
+}
+
+.hero-badge {
+    background: linear-gradient(90deg, #7dd3fc, #38bdf8) !important;
+    color: #02131f !important;
+}
+
+/* Cards */
+.compact-metric,
+.section-card,
+.mission-card,
+.nw-exercise-card,
+div[data-testid="stMetric"],
+div[data-testid="stExpander"],
+details {
+    border-radius: 28px !important;
+    background:
+        linear-gradient(145deg, rgba(15,39,68,.68), rgba(2,6,23,.72)) !important;
+    border: 1px solid rgba(56,189,248,.11) !important;
+    box-shadow:
+        0 12px 34px rgba(0,0,0,.25),
+        0 0 18px rgba(56,189,248,.07),
+        inset 0 0 18px rgba(56,189,248,.03) !important;
+    transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease !important;
+}
+
+.compact-metric:hover,
+.section-card:hover,
+.mission-card:hover,
+.nw-exercise-card:hover,
+div[data-testid="stMetric"]:hover {
+    transform: translateY(-3px) !important;
+    border-color: rgba(56,189,248,.24) !important;
+    box-shadow:
+        0 18px 42px rgba(0,0,0,.30),
+        0 0 34px rgba(56,189,248,.18) !important;
+}
+
+/* Restore dynamic glowing progress bars everywhere */
+.progress-track {
+    position: relative !important;
+    height: 14px !important;
+    border-radius: 999px !important;
+    overflow: hidden !important;
+    background: rgba(2,6,23,.88) !important;
+    border: 1px solid rgba(56,189,248,.14) !important;
+    box-shadow: inset 0 0 14px rgba(0,0,0,.55) !important;
+}
+
+.progress-fill {
+    width: var(--progress) !important;
+    height: 100% !important;
+    border-radius: 999px !important;
+    background:
+        linear-gradient(90deg, #075985, #0ea5e9, #38bdf8, #7dd3fc, #38bdf8) !important;
+    background-size: 240% 100% !important;
+    animation: iosProgressShimmer 1.45s linear infinite, iosProgressPulse 2.2s ease-in-out infinite !important;
+    box-shadow:
+        0 0 18px rgba(56,189,248,.62),
+        0 0 34px rgba(56,189,248,.35) !important;
+}
+
+.progress-fill::after {
+    content:"";
+    position:absolute;
+    top:0;
+    left:-40%;
+    width:35%;
+    height:100%;
+    background:linear-gradient(90deg, transparent, rgba(255,255,255,.65), transparent);
+    animation: iosProgressSweep 1.8s ease-in-out infinite;
+}
+
+@keyframes iosProgressShimmer {
+    from { background-position: 0% 0%; }
+    to { background-position: 240% 0%; }
+}
+
+@keyframes iosProgressPulse {
+    0%,100% { filter: brightness(1); }
+    50% { filter: brightness(1.22); }
+}
+
+@keyframes iosProgressSweep {
+    0% { left:-45%; }
+    55% { left:110%; }
+    100% { left:110%; }
+}
+
+.stProgress div div div,
+[data-testid="stProgress"] div div div {
+    background:
+        linear-gradient(90deg, #075985, #0ea5e9, #38bdf8, #7dd3fc) !important;
+    box-shadow: 0 0 22px rgba(56,189,248,.48) !important;
+    animation: iosProgressShimmer 1.45s linear infinite !important;
+}
+
+/* Inputs feel more native */
+[data-baseweb="select"] > div,
+input,
+textarea {
+    border-radius: 18px !important;
+    background: rgba(2,6,23,.72) !important;
+    border-color: rgba(56,189,248,.14) !important;
+    color: #eaf7ff !important;
+}
+
+/* Hide the sidebar visually being essential by making it compact and labelled backup */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, rgba(2,6,23,.98), rgba(7,20,38,.96)) !important;
+}
+
+.side-sub::after {
+    content: " • backup";
+    color: #64748b;
+}
+
+/* Better phone layout */
+@media (max-width: 760px) {
+    [data-testid="stMainBlockContainer"] {
+        padding-left: .8rem !important;
+        padding-right: .8rem !important;
+        padding-top: .5rem !important;
+    }
+
+    .mobile-app-topbar {
+        top: .25rem;
+        padding: 12px;
+        border-radius: 24px;
+    }
+
+    .app-title { font-size: 1rem; }
+    .app-subtitle { font-size: .68rem; }
+    .app-status-pill { display:none; }
+
+    .hero-panel {
+        padding: 18px !important;
+        border-radius: 26px !important;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
