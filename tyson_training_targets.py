@@ -3627,7 +3627,7 @@ st.markdown("""
     <div class="app-title-wrap">
         <div class="app-icon">⚡</div>
         <div>
-            <div class="app-title">Tyson Training</div>
+            <div class="app-title">Training Tracker</div>
             <div class="app-subtitle">Fitness OS</div>
         </div>
     </div>
@@ -3638,10 +3638,10 @@ st.markdown("""
 nav_cols = st.columns(len(PRIMARY_PAGES))
 nav_labels = {
     "Home": "🏠 Home",
-    "Today": "🏋️ Today",
+    "Today": "🏋️ Workout",
     "Avatar": "🧬 Avatar",
     "Progress": "📈 Progress",
-    "Physique": "🤖 AI",
+    "Physique": "🤖 AI Coach",
     "Cardio": "🫀 Cardio",
     "Goals": "🎯 Goals",
     "Data Manager": "📂 Data",
@@ -3653,7 +3653,7 @@ for col, page_name in zip(nav_cols, PRIMARY_PAGES):
             st.session_state.active_page = page_name
             st.rerun()
 
-with st.expander("More pages", expanded=False):
+with st.expander("Other Features", expanded=False):
     more_cols = st.columns(4)
     for i, page_name in enumerate(MORE_PAGES):
         with more_cols[i % 4]:
