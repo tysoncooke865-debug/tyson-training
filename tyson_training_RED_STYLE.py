@@ -3013,251 +3013,261 @@ textarea:focus {
 st.markdown("""
 <style>
 /* ============================================================
-   FULL RED AESTHETIC OVERRIDE — LOADED LAST
-   Forces every remaining Streamlit default red/black.
+   REFINED REDLINE THEME — CLEAN DARK RED, ANIMATED, NO UGLY OUTLINES
+   Loaded last, but targeted instead of nuking every element.
 ============================================================ */
 
 :root {
-    --primary-color: #ff2b2b !important;
-    --background-color: #050000 !important;
-    --secondary-background-color: #160000 !important;
-    --text-color: #ffe0e0 !important;
+    --primary-color: #ff3b3b !important;
+    --background-color: #050505 !important;
+    --secondary-background-color: #111111 !important;
+    --text-color: #f5f5f5 !important;
 }
 
-* {
-    accent-color: #ff2b2b !important;
-}
-
-/* Every page background */
-html,
-body,
+/* Main animated background across every page */
 .stApp,
 [data-testid="stAppViewContainer"],
-[data-testid="stMain"],
-[data-testid="stMainBlockContainer"],
-[data-testid="stVerticalBlock"],
-[data-testid="stHorizontalBlock"],
-.main,
-.block-container,
-section.main {
+[data-testid="stMain"] {
     background:
-        radial-gradient(circle at 12% 12%, rgba(255,0,0,0.36), transparent 26%),
-        radial-gradient(circle at 88% 22%, rgba(176,0,32,0.34), transparent 30%),
-        radial-gradient(circle at 50% 90%, rgba(139,0,0,0.32), transparent 38%),
-        linear-gradient(135deg, #050000 0%, #160000 50%, #050000 100%) !important;
+        radial-gradient(circle at 12% 8%, rgba(255, 59, 59, 0.18), transparent 30%),
+        radial-gradient(circle at 88% 22%, rgba(139, 0, 0, 0.22), transparent 32%),
+        radial-gradient(circle at 50% 100%, rgba(80, 0, 0, 0.18), transparent 38%),
+        linear-gradient(135deg, #050505 0%, #100606 48%, #050505 100%) !important;
     background-size: 180% 180% !important;
-    animation: redShift 12s ease infinite !important;
+    animation: redlineBackgroundMove 14s ease infinite !important;
 }
 
-@keyframes redShift {
+@keyframes redlineBackgroundMove {
     0% { background-position: 0% 30%; }
     50% { background-position: 100% 70%; }
     100% { background-position: 0% 30%; }
 }
 
-/* Sidebar */
-section[data-testid="stSidebar"],
-section[data-testid="stSidebar"] *,
-[data-testid="stSidebarContent"] {
-    background-color: #100000 !important;
-    border-color: rgba(255,51,51,0.45) !important;
+/* Keep page blocks transparent so the app background shows through */
+.block-container,
+[data-testid="stMainBlockContainer"] {
+    background: transparent !important;
 }
 
+/* Sidebar: dark red glass, no loud borders */
 section[data-testid="stSidebar"] {
     background:
-        linear-gradient(180deg, #300000 0%, #130000 55%, #050000 100%) !important;
+        linear-gradient(180deg, rgba(32, 0, 0, 0.96), rgba(8, 8, 8, 0.98)) !important;
+    box-shadow: 8px 0 28px rgba(0,0,0,0.35) !important;
 }
 
-/* Header/hero and all cards */
+section[data-testid="stSidebar"] * {
+    color: #f5f5f5 !important;
+}
+
+/* Hero/header — animated entrance and soft glow */
 .nw-hero,
 .redline-hero,
-[class*="hero"],
+[class*="hero"] {
+    background:
+        linear-gradient(135deg, rgba(28, 8, 8, 0.94), rgba(48, 0, 0, 0.88), rgba(10, 10, 10, 0.94)) !important;
+    border: 1px solid rgba(255, 59, 59, 0.22) !important;
+    box-shadow:
+        0 0 34px rgba(255, 59, 59, 0.22),
+        inset 0 0 26px rgba(255, 59, 59, 0.07) !important;
+    animation:
+        heroDropIn 0.9s cubic-bezier(.18,.89,.32,1.28),
+        redlineHeroGlow 4s ease-in-out infinite !important;
+}
+
+@keyframes heroDropIn {
+    0% { opacity: 0; transform: translateY(-28px) scale(.97); filter: blur(8px); }
+    65% { opacity: 1; transform: translateY(4px) scale(1.01); filter: blur(0); }
+    100% { transform: translateY(0) scale(1); }
+}
+
+@keyframes redlineHeroGlow {
+    0%, 100% {
+        box-shadow: 0 0 26px rgba(255,59,59,.18), inset 0 0 20px rgba(255,59,59,.06);
+    }
+    50% {
+        box-shadow: 0 0 42px rgba(255,59,59,.36), inset 0 0 28px rgba(255,59,59,.10);
+    }
+}
+
+.nw-hero-title,
+.nw-hero-sub,
+.nw-card-title,
+.mission-title {
+    color: #fff1f1 !important;
+    text-shadow: 0 0 12px rgba(255,59,59,.55) !important;
+}
+
+.nw-small,
+.progress-label,
+[data-testid="stCaptionContainer"] {
+    color: #ffb3b3 !important;
+}
+
+/* Scanline stays animated */
+.nw-scanline {
+    background: linear-gradient(90deg, transparent, #8b0000, #ff3b3b, #ffb3b3, #ff3b3b, transparent) !important;
+    background-size: 220% 100% !important;
+    animation: scanMove 2.2s linear infinite !important;
+    box-shadow: 0 0 14px rgba(255,59,59,.65) !important;
+}
+
+/* Cards/metrics/expanders: dark glass, subtle red glow, no harsh outline */
 .mission-card,
 .nw-exercise-card,
 .dashboard-card,
 div[data-testid="stMetric"],
 div[data-testid="stExpander"],
-details,
-[data-testid="stAlert"],
-[data-testid="stFileUploader"],
-[data-testid="stDataFrame"],
-[data-testid="stTable"],
-.stDataFrame,
-.stTable,
-[data-baseweb="notification"],
-[data-baseweb="popover"],
-[data-baseweb="menu"],
-[data-baseweb="select"] > div,
-[data-baseweb="input"] > div,
-[data-baseweb="textarea"] > div {
+details {
     background:
-        linear-gradient(145deg, rgba(60,0,0,0.98), rgba(15,0,0,0.98)) !important;
-    background-color: #160000 !important;
-    border: 1px solid rgba(255,51,51,0.72) !important;
+        linear-gradient(145deg, rgba(22, 22, 22, 0.88), rgba(28, 4, 4, 0.82)) !important;
+    border: 1px solid rgba(255, 59, 59, 0.14) !important;
     box-shadow:
-        0 0 22px rgba(255,0,0,0.34),
-        inset 0 0 16px rgba(255,0,0,0.16) !important;
+        0 10px 28px rgba(0,0,0,.28),
+        0 0 18px rgba(255,59,59,.10),
+        inset 0 0 14px rgba(255,59,59,.035) !important;
+    transition: transform .24s ease, box-shadow .24s ease, border-color .24s ease !important;
+    animation: redlineCardFade .45s ease, redlineCardBreath 5s ease-in-out infinite !important;
 }
 
-/* Hero text and app text */
-.nw-hero-title,
-.nw-hero-sub,
-.nw-card-title,
-.nw-small,
-.mission-title,
-.progress-label,
-h1, h2, h3, h4, h5, h6,
-p, span, label,
-[data-testid="stMarkdown"],
-[data-testid="stCaptionContainer"] {
-    color: #ffe0e0 !important;
-    text-shadow: 0 0 8px rgba(255,51,51,0.55) !important;
+@keyframes redlineCardFade {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
-/* Badge + scanline */
-.nw-badge {
-    color: #ffe0e0 !important;
-    background: rgba(255,0,0,0.24) !important;
-    border: 1px solid rgba(255,80,80,0.82) !important;
-    box-shadow: 0 0 18px rgba(255,0,0,0.50) !important;
+@keyframes redlineCardBreath {
+    0%, 100% { box-shadow: 0 10px 28px rgba(0,0,0,.28), 0 0 14px rgba(255,59,59,.08); }
+    50% { box-shadow: 0 10px 28px rgba(0,0,0,.28), 0 0 24px rgba(255,59,59,.16); }
 }
 
-.nw-scanline {
-    background: linear-gradient(90deg, transparent, #8b0000, #ff3333, #ffb3b3, #ff3333, transparent) !important;
-    box-shadow: 0 0 20px rgba(255,51,51,0.95) !important;
+.mission-card:hover,
+.nw-exercise-card:hover,
+.dashboard-card:hover,
+div[data-testid="stMetric"]:hover {
+    transform: translateY(-4px) scale(1.005) !important;
+    border-color: rgba(255, 59, 59, 0.28) !important;
+    box-shadow:
+        0 14px 34px rgba(0,0,0,.34),
+        0 0 28px rgba(255,59,59,.24) !important;
 }
 
-/* Buttons */
-.stButton button,
-button,
-button[kind="primary"],
-button[kind="secondary"] {
-    background: linear-gradient(90deg, #8b0000, #d90429, #ff3333) !important;
-    color: #ffffff !important;
-    border: 1px solid rgba(255,128,128,0.80) !important;
-    box-shadow: 0 0 20px rgba(255,0,0,0.58) !important;
-}
-
-.stButton button:hover,
-button:hover {
-    background: linear-gradient(90deg, #b00020, #ff3333, #ff6666) !important;
+/* Buttons keep pulse but not ugly universal outline */
+.stButton button {
+    background: linear-gradient(90deg, #6f0000, #b00020, #ff3b3b) !important;
     color: white !important;
-    box-shadow: 0 0 32px rgba(255,0,0,0.95) !important;
-    transform: translateY(-1px);
+    border: none !important;
+    border-radius: 14px !important;
+    font-weight: 900 !important;
+    box-shadow: 0 0 16px rgba(255,59,59,.28) !important;
+    animation: redlineButtonPulse 3.2s ease-in-out infinite !important;
 }
 
-/* Inputs/selects/radio/checkbox */
-input,
-textarea,
-select,
-[data-baseweb="input"],
-[data-baseweb="textarea"],
-[data-baseweb="select"],
-[data-baseweb="select"] *,
-[data-baseweb="radio"],
-[data-baseweb="checkbox"],
-div[role="radiogroup"] label,
-.stSelectbox,
-.stNumberInput,
-.stTextInput,
-.stTextArea {
-    background-color: #160000 !important;
-    color: #ffe0e0 !important;
-    border-color: rgba(255,51,51,0.72) !important;
+@keyframes redlineButtonPulse {
+    0%,100% { box-shadow: 0 0 12px rgba(255,59,59,.22); }
+    50% { box-shadow: 0 0 26px rgba(255,59,59,.55); }
 }
 
-input:focus,
-textarea:focus,
-[data-baseweb="input"]:focus-within,
-[data-baseweb="textarea"]:focus-within,
-[data-baseweb="select"]:focus-within {
-    border-color: #ff3333 !important;
-    box-shadow: 0 0 14px rgba(255,0,0,0.80) !important;
-}
-
-div[role="radiogroup"] label:hover,
-[data-baseweb="radio"]:hover {
-    background: rgba(255,0,0,0.22) !important;
-    box-shadow: 0 0 14px rgba(255,0,0,0.45) !important;
-}
-
-/* Sliders */
-[data-baseweb="slider"] div,
-.stSlider div {
-    border-color: #ff3333 !important;
-}
-
-[data-baseweb="slider"] [role="slider"] {
-    background-color: #ff3333 !important;
-    box-shadow: 0 0 16px rgba(255,0,0,0.95) !important;
+.stButton button:hover {
+    transform: translateY(-1px) scale(1.02) !important;
+    box-shadow: 0 0 30px rgba(255,59,59,.65) !important;
 }
 
 /* Progress bars */
+.progress-track {
+    background: rgba(8,8,8,.95) !important;
+    border: 1px solid rgba(255,59,59,.18) !important;
+}
+
 .progress-fill,
 .stProgress div div div,
 [data-testid="stProgress"] div div div {
-    background: linear-gradient(90deg, #8b0000, #d90429, #ff3333, #ff9999) !important;
-    box-shadow: 0 0 22px rgba(255,0,0,0.95) !important;
+    background: linear-gradient(90deg, #6f0000, #b00020, #ff3b3b, #ff9b9b) !important;
+    background-size: 200% 100% !important;
+    animation: progressGlow 1.8s linear infinite, fillGrow .7s ease-out !important;
+    box-shadow: 0 0 16px rgba(255,59,59,.55) !important;
 }
 
-.progress-track {
-    background: #100000 !important;
-    border: 1px solid rgba(255,51,51,0.65) !important;
+/* Inputs/selects/radio/file uploader — red accent without red boxes everywhere */
+input,
+textarea {
+    background-color: rgba(14,14,14,.96) !important;
+    color: #f5f5f5 !important;
+    border-color: rgba(255,59,59,.18) !important;
 }
 
-/* Tabs / selected indicators / links */
+input:focus,
+textarea:focus {
+    border-color: rgba(255,59,59,.55) !important;
+    box-shadow: 0 0 0 1px rgba(255,59,59,.25) !important;
+}
+
+[data-baseweb="select"] > div,
+[data-testid="stFileUploader"],
+[data-testid="stFileUploaderDropzone"] {
+    background: rgba(14,14,14,.92) !important;
+    border-color: rgba(255,59,59,.16) !important;
+    box-shadow: 0 0 14px rgba(255,59,59,.06) !important;
+}
+
+div[role="radiogroup"] label {
+    background: rgba(18,18,18,.86) !important;
+    border: 1px solid rgba(255,59,59,.10) !important;
+    color: #f5f5f5 !important;
+}
+
+div[role="radiogroup"] label:hover {
+    background: rgba(255,59,59,.10) !important;
+    box-shadow: 0 0 14px rgba(255,59,59,.16) !important;
+}
+
+* {
+    accent-color: #ff3b3b !important;
+}
+
+/* Sliders */
+[data-baseweb="slider"] [role="slider"] {
+    background-color: #ff3b3b !important;
+    box-shadow: 0 0 12px rgba(255,59,59,.55) !important;
+}
+
+/* Alerts */
+[data-testid="stAlert"] {
+    background: rgba(32, 8, 8, .88) !important;
+    border: 1px solid rgba(255,59,59,.16) !important;
+    color: #f5f5f5 !important;
+}
+
+/* Tables/dataframes: dark neutral with red accents */
+[data-testid="stDataFrame"],
+[data-testid="stTable"] {
+    background: rgba(12,12,12,.90) !important;
+    border: 1px solid rgba(255,59,59,.10) !important;
+}
+
+/* Links/active UI */
 a,
-[data-testid="stSidebarNav"] a,
 button[aria-selected="true"],
 [aria-selected="true"] {
-    color: #ff6666 !important;
-    border-color: #ff3333 !important;
+    color: #ff7777 !important;
+    border-color: rgba(255,59,59,.32) !important;
 }
 
-/* Tables/dataframe internals */
-table,
-thead,
-tbody,
-tr,
-td,
-th,
-[data-testid="stDataFrame"] * {
-    background-color: #160000 !important;
-    color: #ffe0e0 !important;
-    border-color: rgba(255,51,51,0.35) !important;
-}
-
-/* File uploader internal text/button */
-[data-testid="stFileUploader"] *,
-[data-testid="stFileUploaderDropzone"] {
-    background-color: #160000 !important;
-    color: #ffe0e0 !important;
-    border-color: rgba(255,51,51,0.72) !important;
-}
-
-/* Expander headers */
-.streamlit-expanderHeader,
-[data-testid="stExpander"] summary {
-    background: #220000 !important;
-    color: #ffe0e0 !important;
+/* Remove ugly browser/Streamlit blue focus rings */
+*:focus-visible {
+    outline: 1px solid rgba(255,59,59,.42) !important;
+    box-shadow: none !important;
 }
 
 /* Scrollbar */
 ::-webkit-scrollbar {
-    background: #050000 !important;
+    background: #050505 !important;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #d90429 !important;
-    box-shadow: 0 0 12px rgba(255,0,0,0.90) !important;
+    background: #8b0000 !important;
+    border-radius: 999px !important;
 }
 
-/* Remove any default focus blue rings */
-*:focus,
-*:focus-visible {
-    outline-color: #ff3333 !important;
-    box-shadow: 0 0 0 2px rgba(255,0,0,0.45) !important;
-}
 </style>
 """, unsafe_allow_html=True)
 
