@@ -2785,7 +2785,364 @@ Return ONLY valid JSON:
     except Exception as e:
         return None, f"AI custom plan failed: {e}"
 
-st.set_page_config(page_title=APP_TITLE, layout="centered")
+
+# ============================================================
+# UI HELPERS
+# ============================================================
+
+def ui_toast_area():
+    if st.session_state.get("just_saved_message"):
+        st.markdown(
+            f"""
+            <div class="floating-toast save-toast">
+                ✅ {st.session_state.get("just_saved_message")}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.session_state.just_saved_message = ""
+
+    if st.session_state.get("pr_message"):
+        st.markdown(
+            f"""
+            <div class="floating-toast pr-toast">
+                🏆 PR DETECTED — {st.session_state.get("pr_message")}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.session_state.pr_message = ""
+
+    if st.session_state.get("achievement_message"):
+        st.markdown(
+            f"""
+            <div class="floating-toast achievement-toast">
+                🎖️ {st.session_state.get("achievement_message")}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.session_state.achievement_message = ""
+
+
+def page_hero(title, subtitle="", badge=""):
+    badge_html = f'<div class="hero-badge">{badge}</div>' if badge else ""
+    st.markdown(
+        f"""
+        <div class="hero-panel">
+            <div>
+                <div class="hero-title">{title}</div>
+                <div class="hero-subtitle">{subtitle}</div>
+            </div>
+            {badge_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def section_card(title, body="", icon=""):
+    st.markdown(
+        f"""
+        <div class="section-card">
+            <div class="section-card-title">{icon} {title}</div>
+            <div class="section-card-body">{body}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def compact_metric(label, value, helper=""):
+    st.markdown(
+        f"""
+        <div class="compact-metric">
+            <div class="compact-label">{label}</div>
+            <div class="compact-value">{value}</div>
+            <div class="compact-helper">{helper}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
+st.set_page_config(page_title=APP_TITLE, layout="wide")
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   SEAMLESS BLUE COMMAND UI
+============================================================ */
+
+:root {
+    --bg0:#020617;
+    --bg1:#071426;
+    --bg2:#0b1d3a;
+    --blue:#38bdf8;
+    --blue2:#0ea5e9;
+    --text:#eaf7ff;
+    --muted:#8fb8d6;
+    --panel:rgba(8,18,34,.72);
+    --panel2:rgba(15,39,68,.72);
+}
+
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(circle at 10% 0%, rgba(56,189,248,.23), transparent 28%),
+        radial-gradient(circle at 90% 10%, rgba(14,165,233,.18), transparent 30%),
+        linear-gradient(135deg, var(--bg0), var(--bg1) 45%, var(--bg0)) !important;
+    background-size: 160% 160%;
+    animation: bgShift 16s ease infinite;
+}
+
+@keyframes bgShift {
+    0% { background-position: 0% 25%; }
+    50% { background-position: 100% 75%; }
+    100% { background-position: 0% 25%; }
+}
+
+[data-testid="stMainBlockContainer"] {
+    padding-top: 1.5rem;
+    padding-bottom: 4rem;
+    max-width: 1320px;
+}
+
+section[data-testid="stSidebar"] {
+    background:
+        linear-gradient(180deg, rgba(2,6,23,.98), rgba(7,20,38,.96)) !important;
+    border-right: 1px solid rgba(56,189,248,.18);
+}
+
+.side-brand {
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:14px 10px 18px 10px;
+    margin-bottom:4px;
+    border-radius:18px;
+    background:linear-gradient(135deg, rgba(56,189,248,.14), rgba(14,165,233,.04));
+    box-shadow:0 0 20px rgba(56,189,248,.08);
+}
+
+.side-logo {
+    width:42px;
+    height:42px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:14px;
+    background:linear-gradient(135deg, #075985, #38bdf8);
+    box-shadow:0 0 20px rgba(56,189,248,.35);
+    font-size:22px;
+}
+
+.side-title {
+    font-weight:900;
+    letter-spacing:.08em;
+    color:#eaf7ff;
+    font-size:.92rem;
+}
+
+.side-sub {
+    color:#7dd3fc;
+    font-size:.75rem;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+}
+
+.hero-panel {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:20px;
+    padding:24px 26px;
+    margin:0 0 22px 0;
+    border-radius:28px;
+    background:
+        linear-gradient(135deg, rgba(15,39,68,.88), rgba(2,6,23,.86)),
+        radial-gradient(circle at 15% 20%, rgba(56,189,248,.22), transparent 28%);
+    border:1px solid rgba(56,189,248,.16);
+    box-shadow:
+        0 18px 50px rgba(0,0,0,.28),
+        0 0 34px rgba(56,189,248,.12),
+        inset 0 0 28px rgba(56,189,248,.045);
+    animation: heroIn .75s cubic-bezier(.18,.89,.32,1.28);
+}
+
+@keyframes heroIn {
+    from { opacity:0; transform:translateY(-18px) scale(.985); filter:blur(8px); }
+    to { opacity:1; transform:translateY(0) scale(1); filter:blur(0); }
+}
+
+.hero-title {
+    color:#eaf7ff;
+    font-size:2.0rem;
+    line-height:1.05;
+    font-weight:950;
+    letter-spacing:-.04em;
+    text-shadow:0 0 20px rgba(56,189,248,.32);
+}
+
+.hero-subtitle {
+    color:#8fb8d6;
+    margin-top:8px;
+    font-size:.98rem;
+}
+
+.hero-badge {
+    color:#020617;
+    background:linear-gradient(90deg, #7dd3fc, #38bdf8);
+    padding:10px 14px;
+    border-radius:999px;
+    font-weight:900;
+    box-shadow:0 0 24px rgba(56,189,248,.24);
+    white-space:nowrap;
+}
+
+.compact-metric,
+.section-card,
+.mission-card,
+.nw-exercise-card,
+div[data-testid="stMetric"],
+div[data-testid="stExpander"] {
+    border-radius:22px !important;
+    background:linear-gradient(145deg, rgba(15,39,68,.72), rgba(2,6,23,.76)) !important;
+    border:1px solid rgba(56,189,248,.12) !important;
+    box-shadow:
+        0 10px 34px rgba(0,0,0,.24),
+        inset 0 0 16px rgba(56,189,248,.035) !important;
+    transition:transform .22s ease, box-shadow .22s ease, border-color .22s ease;
+}
+
+.compact-metric:hover,
+.section-card:hover,
+.mission-card:hover,
+.nw-exercise-card:hover,
+div[data-testid="stMetric"]:hover {
+    transform:translateY(-3px);
+    border-color:rgba(56,189,248,.25) !important;
+    box-shadow:0 16px 42px rgba(0,0,0,.30), 0 0 24px rgba(56,189,248,.14) !important;
+}
+
+.compact-metric {
+    padding:18px 20px;
+}
+
+.compact-label {
+    color:#8fb8d6;
+    font-size:.78rem;
+    text-transform:uppercase;
+    letter-spacing:.12em;
+    font-weight:800;
+}
+
+.compact-value {
+    color:#eaf7ff;
+    font-size:1.7rem;
+    font-weight:950;
+    margin-top:6px;
+}
+
+.compact-helper {
+    color:#7dd3fc;
+    font-size:.82rem;
+    margin-top:4px;
+}
+
+.section-card {
+    padding:18px 20px;
+    margin:10px 0;
+}
+
+.section-card-title {
+    font-size:1rem;
+    color:#eaf7ff;
+    font-weight:900;
+    margin-bottom:6px;
+}
+
+.section-card-body {
+    color:#8fb8d6;
+    font-size:.92rem;
+}
+
+.stButton button {
+    border-radius:14px !important;
+    border:0 !important;
+    background:linear-gradient(90deg, #075985, #0ea5e9, #38bdf8) !important;
+    color:#02131f !important;
+    font-weight:900 !important;
+    box-shadow:0 0 18px rgba(56,189,248,.20);
+    transition:all .18s ease;
+}
+
+.stButton button:hover {
+    transform:translateY(-1px);
+    box-shadow:0 0 28px rgba(56,189,248,.36);
+}
+
+[data-baseweb="select"] > div,
+input,
+textarea {
+    border-radius:14px !important;
+    background:rgba(2,6,23,.68) !important;
+    border-color:rgba(56,189,248,.16) !important;
+    color:#eaf7ff !important;
+}
+
+.floating-toast {
+    position:fixed;
+    right:24px;
+    bottom:24px;
+    z-index:999999;
+    padding:14px 18px;
+    border-radius:18px;
+    font-weight:900;
+    color:#eaf7ff;
+    background:rgba(2,6,23,.92);
+    border:1px solid rgba(56,189,248,.28);
+    box-shadow:0 0 28px rgba(56,189,248,.24);
+    animation: toastIn 3.2s ease forwards;
+}
+
+@keyframes toastIn {
+    0% { opacity:0; transform:translateY(16px) scale(.98); }
+    12% { opacity:1; transform:translateY(0) scale(1); }
+    82% { opacity:1; transform:translateY(0) scale(1); }
+    100% { opacity:0; transform:translateY(12px) scale(.98); }
+}
+
+.save-toast { border-color:rgba(34,197,94,.38); box-shadow:0 0 28px rgba(34,197,94,.18); }
+.pr-toast { border-color:rgba(250,204,21,.45); box-shadow:0 0 28px rgba(250,204,21,.20); }
+.achievement-toast { border-color:rgba(168,85,247,.45); box-shadow:0 0 28px rgba(168,85,247,.20); }
+
+.progress-track {
+    border-radius:999px !important;
+    overflow:hidden;
+    background:rgba(2,6,23,.8) !important;
+    border:1px solid rgba(56,189,248,.12);
+}
+
+.progress-fill {
+    background:linear-gradient(90deg, #075985, #38bdf8, #7dd3fc) !important;
+    background-size:200% 100%;
+    animation: progressMove 1.8s linear infinite;
+}
+
+@keyframes progressMove {
+    from { background-position:0% 0%; }
+    to { background-position:200% 0%; }
+}
+
+hr {
+    border-color:rgba(56,189,248,.12) !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
 
 st.markdown("""
 <style>
@@ -2868,7 +3225,40 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-page = st.sidebar.radio("Menu", ["Home", "Profile", "Physique", "Measurements", "Today", "Cardio", "Progress", "Goals", "Achievements", "Body Fat", "Bodyweight", "Data Manager", "Delete Data", "Routine"])
+NAV_GROUPS = {
+    "Command": ["Home", "Today", "Progress"],
+    "AI Coach": ["Physique", "Body Fat", "Goals"],
+    "Tracking": ["Cardio", "Bodyweight", "Measurements"],
+    "System": ["Achievements", "Data Manager", "Routine", "Delete Data"],
+}
+
+st.sidebar.markdown("""
+<div class="side-brand">
+    <div class="side-logo">⚡</div>
+    <div>
+        <div class="side-title">TYSON TRAINING</div>
+        <div class="side-sub">Command OS</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+nav_group = st.sidebar.selectbox("Section", list(NAV_GROUPS.keys()), key="nav_group")
+page = st.sidebar.radio("Page", NAV_GROUPS[nav_group], key="nav_page")
+
+st.sidebar.markdown("---")
+st.sidebar.caption("Quick jump")
+quick_cols = st.sidebar.columns(2)
+with quick_cols[0]:
+    if st.button("🏋️ Today", use_container_width=True):
+        st.session_state.nav_group = "Command"
+        st.session_state.nav_page = "Today"
+        st.rerun()
+with quick_cols[1]:
+    if st.button("📂 Data", use_container_width=True):
+        st.session_state.nav_group = "System"
+        st.session_state.nav_page = "Data Manager"
+        st.rerun()
+
 st.markdown(f'<div class="page-transition">⚡ {page} module loaded</div>', unsafe_allow_html=True)
 
 for key in ["just_saved_message", "pr_message", "achievement_message"]:
@@ -2893,7 +3283,18 @@ df = load_log()
 check_achievements()
 
 if page == "Home":
-    st.header("Command Centre")
+    page_hero("Command Centre", "Your daily training cockpit — strength, progress, rank and system status.", f"Level {summary['level']}")
+    st.markdown("### Snapshot")
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        compact_metric("Total Sets", summary["total_sets"], "deduped working sets")
+    with m2:
+        compact_metric("Total Reps", summary["total_reps"], "logged reps")
+    with m3:
+        compact_metric("Bench e1RM", f'{summary["best_bench_1rm"]:.1f}kg', "best strength bench")
+    with m4:
+        compact_metric("Achievements", f'{achievement_count()}/{len(ACHIEVEMENTS)}', "unique unlocks")
+
     summary = workout_summary(df)
     xp_percent = min((summary["xp_into_level"] / summary["xp_needed"]) * 100, 100)
     bench_percent = min((summary["best_bench_1rm"] / 100) * 100, 100)
@@ -2970,7 +3371,7 @@ if page == "Home":
 
 
 elif page == "Profile":
-    st.header("Athlete Profile")
+    page_hero("Athlete Profile", "Set your baseline stats so levels reflect your current physique.", "Profile")
     st.info("Set your starting level from your current real-world stats, so you don't start at Level 1.")
 
     profile = load_profile()
@@ -3010,7 +3411,7 @@ elif page == "Profile":
 
 
 elif page == "Measurements":
-    st.header("Body Measurements")
+    page_hero("Body Measurements", "Track proportions, waist, arms, chest, shoulders and more.", "Tracking")
     st.info("Log measurements to track proportions and help the app generate better physique-focused training plans.")
 
     latest = latest_measurements()
@@ -3068,7 +3469,7 @@ elif page == "Measurements":
 
 
 elif page == "Physique":
-    st.header("AI Physique Rating")
+    page_hero("AI Physique Rating", "Upload photos, rate weak points, generate a smarter program.", "AI Coach")
     st.info("Upload physique photos to get a physique score, leanness score, weak points, and a custom workout plan suggestion.")
 
     latest_m = latest_measurements()
@@ -3195,7 +3596,7 @@ elif page == "Physique":
 
 
 elif page == "Today":
-    st.header("Today’s Workout")
+    page_hero("Today’s Workout", "Choose your plan, log sets, chase PRs.", "Auto-save")
     if st.session_state.get("last_supabase_error"):
         st.error(st.session_state.get("last_supabase_error"))
 
@@ -3291,7 +3692,7 @@ elif page == "Today":
 
 
 elif page == "Cardio":
-    st.header("Cardio Tracker")
+    page_hero("Cardio Tracker", "Log conditioning, steps, incline work, boxing or walks.", "Engine")
     cardio = load_cardio_log()
     c_date = st.date_input("Date", value=date.today())
     c_type = st.selectbox("Type", ["Treadmill incline walk", "Outdoor walk", "Run", "Bike", "Stairmaster", "Boxing", "Other"])
@@ -3331,7 +3732,7 @@ elif page == "Cardio":
 
 
 elif page == "Progress":
-    st.header("Progress")
+    page_hero("Progress", "Review your lifting history and trend data.", "Analytics")
     if df.empty:
         st.info("No workouts logged yet.")
     else:
@@ -3417,7 +3818,7 @@ elif page == "Goals":
 
 
 elif page == "Achievements":
-    st.header("Achievements")
+    page_hero("Achievements", "Unlocked milestones and progression badges.", "Trophies")
     st.info("Achievements auto-unlock from your existing logs, bodyweight, body fat, cardio, targets, and profile level.")
 
     unlocked = check_achievements()
@@ -3676,7 +4077,7 @@ elif page == "Body Fat":
 
 
 elif page == "Bodyweight":
-    st.header("Bodyweight")
+    page_hero("Bodyweight", "Track scale weight across cut and bulk phases.", "Scale")
     bw_df = load_bodyweight_log()
     bw_date = st.date_input("Date", value=date.today())
     bw = st.number_input("Bodyweight kg", min_value=0.0, step=0.1)
@@ -3695,7 +4096,7 @@ elif page == "Bodyweight":
 
 
 elif page == "Data Manager":
-    st.header("📂 Data Manager")
+    page_hero("Data Manager", "Backups, Supabase diagnostics, CSV restore and migration.", "System")
     st.info("Download backups of your workout data. Supabase is used first when connected, with CSV as backup.")
 
     st.subheader("Supabase Status")
