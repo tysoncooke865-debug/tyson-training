@@ -6,8 +6,11 @@ import os
 import base64
 import json
 import math
+from supabase import create_client
+import zipfile
+from io import BytesIO
 
-APP_TITLE = "Jesse Training"
+APP_TITLE = "Tyson Training"
 LOG_FILE = Path("workout_log.csv")
 BODYWEIGHT_FILE = Path("bodyweight_log.csv")
 CARDIO_FILE = Path("cardio_log.csv")
@@ -18,6 +21,286 @@ CUSTOM_PLAN_FILE = Path("custom_workout_plan.csv")
 TARGETS_FILE = Path("targets.csv")
 PROFILE_FILE = Path("profile.csv")
 ACHIEVEMENT_FILE = Path("achievements.csv")
+AVATAR_FILE = Path("avatar_progression.csv")
+
+def get_supabase_client():
+    try:
+        url = st.secrets.get("SUPABASE_URL", None)
+        key = st.secrets.get("SUPABASE_KEY", None)
+    except Exception:
+        url, key = None, None
+
+    url = url or os.getenv("SUPABASE_URL")
+    key = key or os.getenv("SUPABASE_KEY")
+
+    if not url or not key:
+        return None
+
+    try:
+        return create_client(url, key)
+    except Exception:
+        return None
+
+
+def supabase_enabled():
+    return get_supabase_client() is not None
+
+
+SUPABASE_TABLE_SCHEMAS = {
+    "workout_log": ["date", "workout", "exercise", "muscle", "set", "weight", "reps", "estimated_1rm", "volume", "notes", "timestamp"],
+    "bodyweight_log": ["date", "bodyweight", "timestamp"],
+    "cardio_log": ["date", "type", "cardio_type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"],
+    "bodyfat_log": ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"],
+    "measurements": ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"],
+    "physique_ratings": ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"],
+    "custom_workout_plan": ["plan_name", "workout", "exercise", "sets", "reps", "muscle", "reason", "day_goal", "timestamp"],
+    "achievements": ["achievement_id", "name", "description", "date_unlocked"],
+    "targets": ["target_type", "name", "target_value", "unit", "created_at", "notes"],
+    "profile": ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "goal", "current_phase", "focus_areas", "onboarding_complete", "created_at"],
+    "avatar_progression": ["date", "level", "rank", "character_class", "build_type", "strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"],
+}
+
+
+
+def clear_data_cache():
+    try:
+        cached_sb_select.clear()
+    except Exception:
+        pass
+    try:
+        cached_csv_read.clear()
+    except Exception:
+        pass
+
+
+def is_bad_number(v):
+    try:
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def json_safe_value(v):
+    try:
+        if pd.isna(v):
+            return None
+    except Exception:
+        pass
+
+    if hasattr(v, "item"):
+        try:
+            v = v.item()
+        except Exception:
+            pass
+
+    if isinstance(v, (pd.Timestamp, datetime, date)):
+        return str(v)
+
+    if is_bad_number(v):
+        return None
+
+    if isinstance(v, dict):
+        return {str(k): json_safe_value(val) for k, val in v.items() if json_safe_value(val) is not None}
+
+    if isinstance(v, list):
+        return [json_safe_value(x) for x in v if json_safe_value(x) is not None]
+
+    return v
+
+
+def json_safe_record(record):
+    clean = {}
+    for k, v in dict(record).items():
+        safe_v = json_safe_value(v)
+        if safe_v is not None:
+            clean[k] = safe_v
+    return clean
+
+
+def json_safe_records(records):
+    return [json_safe_record(r) for r in records]
+
+
+
+def clean_supabase_value(v):
+    return json_safe_value(v)
+
+
+
+def clean_supabase_row(row, table_name):
+    allowed = SUPABASE_TABLE_SCHEMAS.get(table_name, list(row.keys()))
+    filtered = {}
+
+    for k in allowed:
+        if k not in row:
+            continue
+        filtered[k] = row.get(k)
+
+    clean = json_safe_record(filtered)
+
+    # jsonb columns: accept stringified JSON or Python lists
+    if table_name == "physique_ratings":
+        for key in ["weak_points", "improvements"]:
+            if isinstance(clean.get(key), str):
+                try:
+                    clean[key] = json.loads(clean[key])
+                except Exception:
+                    # Keep as a simple list if Supabase jsonb rejects string
+                    clean[key] = [clean[key]]
+
+    return clean
+
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def cached_sb_select(table_name, limit_rows=2500):
+    sb = get_supabase_client()
+    if sb is None:
+        return None, "Supabase not configured"
+
+    try:
+        # Most recent rows first where timestamp/created_at exists.
+        try:
+            res = sb.table(table_name).select("*").order("timestamp", desc=True).limit(limit_rows).execute()
+        except Exception:
+            try:
+                res = sb.table(table_name).select("*").order("created_at", desc=True).limit(limit_rows).execute()
+            except Exception:
+                res = sb.table(table_name).select("*").limit(limit_rows).execute()
+        return res.data or [], None
+    except Exception as e:
+        return None, str(e)
+
+
+def sb_select(table_name):
+    return cached_sb_select(table_name)
+
+
+
+def sb_insert(table_name, row, show_error=False):
+    sb = get_supabase_client()
+    if sb is None:
+        msg = "Supabase not configured. Check SUPABASE_URL and SUPABASE_KEY in Streamlit Secrets."
+        if show_error:
+            st.error(msg)
+        return False, msg
+
+    clean = clean_supabase_row(row, table_name)
+
+    try:
+        res = sb.table(table_name).insert(clean).execute()
+        clear_data_cache()
+        if show_error:
+            st.success(f"✅ Insert succeeded: {table_name}")
+            try:
+                st.json(res.data)
+            except Exception:
+                st.write(res)
+        return True, None
+
+    except Exception as e:
+        msg = str(e)
+        if show_error:
+            st.error(f"❌ Insert failed: {table_name}")
+            st.code(msg)
+            st.write("Attempted JSON-safe row:")
+            st.json(clean)
+        return False, msg
+
+
+
+def sb_delete_matching(table_name, filters):
+    sb = get_supabase_client()
+    if sb is None:
+        return False, "Supabase not configured"
+
+    try:
+        query = sb.table(table_name).delete()
+        for k, v in filters.items():
+            query = query.eq(k, v)
+        query.execute()
+        clear_data_cache()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+
+def sb_delete_all(table_name):
+    sb = get_supabase_client()
+    if sb is None:
+        return False, "Supabase not configured"
+
+    try:
+        sb.table(table_name).delete().neq(SUPABASE_TABLE_SCHEMAS[table_name][0], "__never_match__").execute()
+        clear_data_cache()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+
+def df_from_supabase(table_name, fallback_path, columns):
+    data, err = sb_select(table_name)
+    if data is not None:
+        df = pd.DataFrame(data)
+        for col in columns:
+            if col not in df.columns:
+                df[col] = ""
+        # For workout logs, de-dupe early to reduce downstream workload.
+        if table_name == "workout_log" and not df.empty:
+            if "set" in df.columns:
+                df["set"] = pd.to_numeric(df["set"], errors="coerce").fillna(0).astype(int)
+            possible = [c for c in ["date", "workout", "exercise", "set"] if c in df.columns]
+            if len(possible) == 4:
+                sort_col = "timestamp" if "timestamp" in df.columns else possible[0]
+                df = df.sort_values(sort_col, ascending=True).drop_duplicates(
+                    subset=possible,
+                    keep="last"
+                ).reset_index(drop=True)
+        return df
+    return load_csv(fallback_path, columns)
+
+
+
+def save_csv_backup(path, columns, row=None, df=None):
+    current = load_csv(path, columns)
+    if df is not None:
+        df.to_csv(path, index=False)
+        clear_data_cache()
+        return
+    if row is not None:
+        pd.concat([current, pd.DataFrame([row])], ignore_index=True).to_csv(path, index=False)
+        clear_data_cache()
+
+
+
+def store_supabase_result(table_name, ok, err):
+    if ok:
+        st.session_state["last_supabase_write"] = f"Saved to Supabase: {table_name}"
+        st.session_state["last_supabase_error"] = ""
+    else:
+        st.session_state["last_supabase_error"] = f"{table_name} insert failed: {err}"
+
+
+
+# -----------------------------
+# SUPABASE CONFIG / CSV BACKUP
+# -----------------------------
+@st.cache_resource
+
+
+
+
+
+
+def append_csv_backup(path, columns, row):
+    df = load_csv(path, columns)
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(path, index=False)
+
+
 
 ROUTINE = {
     "Push 1 - Strength": [
@@ -227,31 +510,90 @@ FALLBACK_AESTHETIC_PLAN = {
 }
 
 MUSCLE_MAP = {
+    # Chest / pressing
     "Barbell Bench Press (Strength)": "Chest",
+    "Barbell Bench Press": "Chest",
     "Paused Barbell Bench Press": "Chest",
     "Dumbbell Flat Bench Press": "Chest",
+    "Machine Chest Press": "Chest",
+    "Incline Barbell Bench Press": "Upper Chest",
+    "Incline Dumbbell Bench Press": "Upper Chest",
+    "Incline Smith Machine Press": "Upper Chest",
+    "Incline Machine Chest Press": "Upper Chest",
     "Pec Deck Machine Fly": "Chest",
+    "Cable Chest Fly": "Chest",
+    "Low-to-High Cable Fly": "Upper Chest",
     "Decline Push-Up": "Chest",
-    "Cable Lateral Raise": "Delts",
-    "Dumbbell Lateral Raise": "Delts",
+    "Machine Dip": "Triceps",
+
+    # Delts / shoulders
+    "Cable Lateral Raise": "Side Delts",
+    "Dumbbell Lateral Raise": "Side Delts",
+    "Machine Lateral Raise": "Side Delts",
+    "Lean-Away Cable Lateral Raise": "Side Delts",
+    "Behind-the-Back Cable Lateral Raise": "Side Delts",
     "Reverse Pec Deck (Rear Delt Fly)": "Rear Delts",
+    "Cable Rear Delt Fly": "Rear Delts",
     "Face Pull": "Rear Delts",
-    "Cable Triceps Pushdown": "Triceps",
-    "Lat Pulldown": "Back",
-    "Cable Lat Pullover (Straight-Arm Pulldown)": "Back",
-    "Chest-Supported Machine Row": "Back",
-    "Chest-Supported Dumbbell Row": "Back",
+    "Chest-Supported Rear Delt Row": "Rear Delts",
+
+    # Back
+    "Lat Pulldown": "Back Width",
+    "Neutral-Grip Lat Pulldown": "Back Width",
+    "Assisted Pull-Up": "Back Width",
+    "Cable Lat Pullover (Straight-Arm Pulldown)": "Back Width",
+    "Single-Arm Cable Lat Pulldown": "Back Width",
+    "Chest-Supported Machine Row": "Back Thickness",
+    "Chest-Supported Dumbbell Row": "Back Thickness",
+    "Seated Cable Row": "Back Thickness",
+    "T-Bar Row": "Back Thickness",
+    "Machine High Row": "Back Thickness",
+
+    # Biceps / forearms
     "EZ-Bar Curl": "Biceps",
     "Dumbbell Biceps Curl": "Biceps",
-    "Barbell Back Squat": "Legs",
-    "Hack Squat Machine": "Legs",
-    "Seated/Lying Leg Curl": "Legs",
-    "Leg Extension": "Legs",
+    "Incline Dumbbell Curl": "Biceps",
+    "Cable Curl": "Biceps",
+    "Preacher Curl Machine": "Biceps",
+    "Hammer Curl": "Biceps",
+    "Reverse Curl": "Forearms",
+    "Wrist Curl": "Forearms",
+    "Cable Wrist Curl": "Forearms",
+    "Farmer Carry": "Forearms",
+
+    # Triceps
+    "Cable Triceps Pushdown": "Triceps",
+    "Overhead Cable Triceps Extension": "Triceps",
+    "Close-Grip Bench Press": "Triceps",
+    "Single-Arm Cable Triceps Extension": "Triceps",
+
+    # Legs
+    "Barbell Back Squat": "Quads",
+    "Hack Squat Machine": "Quads",
+    "Leg Press": "Quads",
+    "Bulgarian Split Squat": "Quads",
+    "Leg Extension": "Quads",
+    "Smith Machine Squat": "Quads",
+    "Seated/Lying Leg Curl": "Hamstrings",
+    "Romanian Deadlift": "Hamstrings",
+    "Seated Leg Curl": "Hamstrings",
+    "Lying Leg Curl": "Hamstrings",
+    "Back Extension": "Hamstrings",
+    "Hip Adduction Machine": "Adductors",
+    "Hip Abduction Machine": "Glutes",
+    "Cable Kickback": "Glutes",
+    "Hip Thrust Machine": "Glutes",
     "Seated Calf Raise": "Calves",
-    "Hip Adduction Machine": "Legs",
+    "Standing Calf Raise": "Calves",
+    "Leg Press Calf Raise": "Calves",
+
+    # Abs
     "Machine Ab Crunch": "Abs",
     "Lying Leg Raise": "Abs",
+    "Hanging Knee Raise": "Abs",
+    "Cable Crunch": "Abs",
     "Weighted Sit-Up": "Abs",
+    "Decline Sit-Up": "Abs",
 }
 
 ACHIEVEMENTS = {
@@ -338,7 +680,10 @@ ACHIEVEMENTS = {
     "true_adam": ("☀️ True Adam", "Reached level 100."),
 }
 
-def load_csv(path, columns):
+@st.cache_data(ttl=20, show_spinner=False)
+def cached_csv_read(path_str, columns_tuple, modified_time):
+    path = Path(path_str)
+    columns = list(columns_tuple)
     if path.exists():
         try:
             df = pd.read_csv(path)
@@ -351,21 +696,121 @@ def load_csv(path, columns):
     return pd.DataFrame(columns=columns)
 
 
+def load_csv(path, columns):
+    try:
+        modified_time = path.stat().st_mtime if path.exists() else 0
+    except Exception:
+        modified_time = 0
+    return cached_csv_read(str(path), tuple(columns), modified_time).copy()
+
+
+
+def load_bodyweight_log():
+    return df_from_supabase("bodyweight_log", BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+
+
+def load_cardio_log():
+    return df_from_supabase("cardio_log", CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"])
+
+
+def save_bodyweight_row(row):
+    ok, err = sb_insert("bodyweight_log", row)
+    store_supabase_result("bodyweight_log", ok, err)
+    save_csv_backup(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"], row=row)
+
+
+def safe_float(value, default=0.0):
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str) and value.strip() == "":
+            return default
+        value = float(value)
+        if math.isnan(value) or math.isinf(value):
+            return default
+        return value
+    except Exception:
+        return default
+
+
+def save_cardio_row(row):
+    clean_row = {
+        "date": str(row.get("date", date.today())),
+        "type": str(row.get("type", row.get("cardio_type", "")) or ""),
+        "minutes": safe_float(row.get("minutes", 0)),
+        "distance_km": safe_float(row.get("distance_km", 0)),
+        "incline": safe_float(row.get("incline", 0)),
+        "speed": safe_float(row.get("speed", 0)),
+        "calories": safe_float(row.get("calories", 0)),
+        "notes": str(row.get("notes", "") or ""),
+        "timestamp": str(row.get("timestamp", datetime.now().isoformat(timespec="seconds"))),
+    }
+
+    ok, err = sb_insert("cardio_log", clean_row)
+
+    # If your Supabase table uses cardio_type instead of type, retry automatically.
+    if not ok and ("type" in str(err).lower() or "column" in str(err).lower() or "schema cache" in str(err).lower()):
+        retry_row = clean_row.copy()
+        retry_row["cardio_type"] = retry_row.pop("type")
+        ok, err = sb_insert("cardio_log", retry_row)
+
+    store_supabase_result("cardio_log", ok, err)
+    save_csv_backup(
+        CARDIO_FILE,
+        ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"],
+        row=clean_row
+    )
+
+
+
 def normalise_workout_log(df):
     if "set" not in df.columns and "set_number" in df.columns:
         df = df.rename(columns={"set_number": "set"})
+
     for col in ["date", "workout", "exercise", "set", "weight", "reps", "timestamp"]:
         if col not in df.columns:
             df[col] = ""
+
+    df["set"] = pd.to_numeric(df["set"], errors="coerce").fillna(0).astype(int)
+
+    if not df.empty:
+        df = df.sort_values("timestamp", ascending=True)
+        df = df.drop_duplicates(
+            subset=["date", "workout", "exercise", "set"],
+            keep="last"
+        ).reset_index(drop=True)
+
     return df
 
 
+
 def load_log():
-    return normalise_workout_log(load_csv(LOG_FILE, ["date", "workout", "exercise", "set", "weight", "reps", "timestamp"]))
+    columns = ["date", "workout", "exercise", "set", "weight", "reps", "timestamp"]
+    return normalise_workout_log(df_from_supabase("workout_log", LOG_FILE, columns))
+
 
 
 def load_achievements():
-    return load_csv(ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"])
+    df = df_from_supabase("achievements", ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"])
+
+    if df.empty:
+        return df
+
+    for col in ["achievement_id", "name", "description", "date_unlocked"]:
+        if col not in df.columns:
+            df[col] = ""
+
+    df["achievement_id"] = df["achievement_id"].astype(str)
+
+    # Migration/testing can create duplicate achievement rows.
+    # Keep only one row per achievement_id so Command Centre counter is correct.
+    if "date_unlocked" in df.columns:
+        df = df.sort_values("date_unlocked", ascending=True)
+
+    df = df.drop_duplicates(subset=["achievement_id"], keep="last").reset_index(drop=True)
+
+    return df[["achievement_id", "name", "description", "date_unlocked"]]
+
 
 
 def save_achievement(achievement_id):
@@ -373,14 +818,24 @@ def save_achievement(achievement_id):
     if achievement_id in ach["achievement_id"].astype(str).tolist():
         return False
     name, desc = ACHIEVEMENTS[achievement_id]
-    new = pd.DataFrame([{
+    row = {
         "achievement_id": achievement_id,
         "name": name,
         "description": desc,
         "date_unlocked": datetime.now().isoformat(timespec="seconds"),
-    }])
-    pd.concat([ach, new], ignore_index=True).to_csv(ACHIEVEMENT_FILE, index=False)
+    }
+    ok, err = sb_insert("achievements", row)
+    store_supabase_result("achievements", ok, err)
+    save_csv_backup(ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"], row=row)
     return True
+
+
+
+def achievement_count():
+    ach = load_achievements()
+    if ach.empty or "achievement_id" not in ach.columns:
+        return 0
+    return ach["achievement_id"].astype(str).nunique()
 
 
 def estimated_1rm(weight, reps):
@@ -436,9 +891,11 @@ def completed_sets_for_day(df, workout_date, workout):
     today = df[(df["date"].astype(str) == str(workout_date)) & (df["workout"].astype(str) == str(workout))]
     if today.empty:
         return 0
+    today = today.drop_duplicates(subset=["date", "workout", "exercise", "set"], keep="last")
     today["weight"] = pd.to_numeric(today["weight"], errors="coerce").fillna(0)
     today["reps"] = pd.to_numeric(today["reps"], errors="coerce").fillna(0)
     return len(today[(today["weight"] > 0) & (today["reps"] > 0)])
+
 
 
 def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
@@ -463,14 +920,25 @@ def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
         (df["set"] == int(set_no))
     )
 
-    new_row = {
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    muscle = infer_muscle_group(exercise) if "infer_muscle_group" in globals() else MUSCLE_MAP.get(exercise, "Other")
+
+    csv_row = {
         "date": str(workout_date),
-        "workout": workout,
-        "exercise": exercise,
+        "workout": str(workout),
+        "exercise": str(exercise),
         "set": int(set_no),
         "weight": float(weight),
         "reps": int(reps),
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "timestamp": timestamp,
+    }
+
+    supabase_row = {
+        **csv_row,
+        "muscle": str(muscle),
+        "estimated_1rm": float(current_1rm),
+        "volume": float(weight) * int(reps),
+        "notes": "",
     }
 
     if mask.any():
@@ -479,26 +947,33 @@ def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
             same_weight = float(old["weight"]) == float(weight)
             same_reps = int(float(old["reps"])) == int(reps)
         except Exception:
-            same_weight = False
-            same_reps = False
+            same_weight = False, False
+
         if same_weight and same_reps:
             return False, False, current_1rm, previous_best
-        df = df.loc[~mask].copy()
 
-    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        df = df.loc[~mask].copy()
+        sb_delete_matching("workout_log", {
+            "date": str(workout_date),
+            "workout": str(workout),
+            "exercise": str(exercise),
+            "set": int(set_no),
+        })
+
+    df = pd.concat([df, pd.DataFrame([csv_row])], ignore_index=True)
     df.to_csv(LOG_FILE, index=False)
+
+    ok, err = sb_insert("workout_log", supabase_row)
+    store_supabase_result("workout_log", ok, err)
+
     check_achievements()
     return True, is_pr, current_1rm, previous_best
 
 
 
-
 def load_targets():
-    return load_csv(
-        TARGETS_FILE,
-        ["target_type", "name", "target_value", "unit", "created_at", "notes"]
-    )
-
+    columns = ["target_type", "name", "target_value", "unit", "created_at", "notes"]
+    return df_from_supabase("targets", TARGETS_FILE, columns)
 
 
 
@@ -507,10 +982,9 @@ def save_or_update_target(target_type, name, target_value, unit, notes=""):
     if not df.empty:
         df["target_type"] = df["target_type"].astype(str)
         df["name"] = df["name"].astype(str)
-        mask = (df["target_type"] == str(target_type)) & (df["name"] == str(name))
-        df = df.loc[~mask].copy()
+        df = df.loc[~((df["target_type"] == str(target_type)) & (df["name"] == str(name)))].copy()
 
-    new_row = {
+    row = {
         "target_type": target_type,
         "name": name,
         "target_value": float(target_value),
@@ -518,7 +992,13 @@ def save_or_update_target(target_type, name, target_value, unit, notes=""):
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "notes": notes,
     }
-    pd.concat([df, pd.DataFrame([new_row])], ignore_index=True).to_csv(TARGETS_FILE, index=False)
+
+    sb_delete_matching("targets", {"target_type": str(target_type), "name": str(name)})
+    ok, err = sb_insert("targets", row)
+    store_supabase_result("targets", ok, err)
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(TARGETS_FILE, index=False)
+
+
 
 def get_target(target_type, name):
     df = load_targets()
@@ -537,27 +1017,46 @@ def get_target(target_type, name):
 
 
 def load_profile():
-    return load_csv(
-        PROFILE_FILE,
-        ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"]
+    columns = [
+        "height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years",
+        "physique_score", "leanness_score", "base_level", "goal", "current_phase",
+        "focus_areas", "onboarding_complete", "created_at"
+    ]
+    return df_from_supabase("profile", PROFILE_FILE, columns)
+
+
+
+
+def save_profile(height_cm, bodyweight_kg, bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score, goal="", current_phase="", focus_areas="", onboarding_complete=True):
+    base_level = calculate_starting_level(
+        safe_num(bench_e1rm, 0),
+        safe_num(squat_e1rm, 0),
+        safe_num(training_years, 0),
+        safe_num(physique_score, 0),
+        safe_num(leanness_score, 0),
     )
-
-
-def save_profile(height_cm, bodyweight_kg, bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score):
-    base_level = calculate_starting_level(bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score)
-    df = pd.DataFrame([{
-        "height_cm": height_cm,
-        "bodyweight_kg": bodyweight_kg,
-        "bench_e1rm": bench_e1rm,
-        "squat_e1rm": squat_e1rm,
-        "training_years": training_years,
-        "physique_score": physique_score,
-        "leanness_score": leanness_score,
-        "base_level": base_level,
+    row = {
+        "height_cm": float(height_cm or 0),
+        "bodyweight_kg": float(bodyweight_kg or 0),
+        "bench_e1rm": float(bench_e1rm or 0),
+        "squat_e1rm": float(squat_e1rm or 0),
+        "training_years": float(training_years or 0),
+        "physique_score": float(physique_score or 0),
+        "leanness_score": float(leanness_score or 0),
+        "base_level": int(base_level),
+        "goal": str(goal or ""),
+        "current_phase": str(current_phase or ""),
+        "focus_areas": str(focus_areas or ""),
+        "onboarding_complete": bool(onboarding_complete),
         "created_at": datetime.now().isoformat(timespec="seconds"),
-    }])
-    df.to_csv(PROFILE_FILE, index=False)
+    }
+    ok, err = sb_insert("profile", row)
+    store_supabase_result("profile", ok, err)
+    pd.DataFrame([row]).to_csv(PROFILE_FILE, index=False)
+    clear_data_cache()
     return base_level
+
+
 
 
 def get_base_level():
@@ -654,7 +1153,7 @@ def current_exercise_best_1rm(exercise_name):
 
 
 def latest_bodyweight_value():
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     if bw_df.empty:
         return None
     bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
@@ -701,6 +1200,316 @@ def render_target_bar(title, current, target, unit, lower_is_better=False):
     )
 
 
+
+# ============================================================
+# AI CHARACTER / AVATAR PROGRESSION
+# ============================================================
+
+def load_avatar_progression():
+    columns = [
+        "date", "level", "rank", "character_class", "build_type",
+        "strength_score", "size_score", "leanness_score", "conditioning_score",
+        "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"
+    ]
+    return df_from_supabase("avatar_progression", AVATAR_FILE, columns)
+
+
+def save_avatar_snapshot(row):
+    ok, err = sb_insert("avatar_progression", row)
+    store_supabase_result("avatar_progression", ok, err)
+    save_csv_backup(
+        AVATAR_FILE,
+        [
+            "date", "level", "rank", "character_class", "build_type",
+            "strength_score", "size_score", "leanness_score", "conditioning_score",
+            "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"
+        ],
+        row=row,
+    )
+
+
+def score_0_100(value, low, high):
+    try:
+        value = float(value)
+        if high <= low:
+            return 0
+        return int(max(0, min(((value - low) / (high - low)) * 100, 100)))
+    except Exception:
+        return 0
+
+
+def latest_physique_rating_values():
+    ratings = load_physique_ratings()
+    if ratings.empty:
+        return {"physique_score": None, "leanness_score": None, "symmetry_score": None, "muscularity_score": None}
+    row = ratings.iloc[-1]
+    out = {}
+    for key in ["physique_score", "leanness_score", "symmetry_score", "muscularity_score"]:
+        try:
+            val = pd.to_numeric(row.get(key, None), errors="coerce")
+            if pd.isna(val):
+                val = None
+        except Exception:
+            val = None
+        out[key] = val
+    return out
+
+
+def safe_num(value, default=0.0):
+    try:
+        if value is None:
+            return default
+        value = float(value)
+        if math.isnan(value) or math.isinf(value):
+            return default
+        return value
+    except Exception:
+        return default
+
+
+def calculate_avatar_stats():
+    df = load_log()
+    summary = workout_summary(df)
+    heat = muscle_heat_map(df)
+
+    latest_bw = latest_bodyweight_value() or summary.get("latest_bw", 0) or 0
+    bf_mid = latest_bodyfat_mid()
+    physique = latest_physique_rating_values()
+    cardio = get_cardio_stats()
+
+    bench = current_exercise_best_1rm("Barbell Bench Press (Strength)")
+    if bench <= 0:
+        bench = max(
+            current_exercise_best_1rm("Barbell Bench Press"),
+            current_exercise_best_1rm("Paused Barbell Bench Press"),
+        )
+
+    squat = current_exercise_best_1rm("Barbell Back Squat")
+    bodyweight = latest_bw if latest_bw and latest_bw > 0 else 77.0
+
+    bench_ratio = bench / bodyweight if bodyweight else 0
+    squat_ratio = squat / bodyweight if bodyweight else 0
+
+    # Strength: based on relative e1RM. 1.5x bench + 2x squat is around 100.
+    strength_score = int(max(0, min((bench_ratio / 1.5) * 55 + (squat_ratio / 2.0) * 45, 100)))
+
+    # Logged muscle sets are useful, but should not make size look 2/100 just because
+    # the app has limited history. Blend actual logs, strength, bodyweight and AI physique rating.
+    muscle_sets = 0
+    if not heat.empty and "sets" in heat.columns:
+        muscle_sets = int(pd.to_numeric(heat["sets"], errors="coerce").fillna(0).sum())
+
+    volume_size_component = max(0, min(int(muscle_sets / 4), 100))  # faster ramp than old /12
+    strength_size_component = int(max(0, min(strength_score * 0.85, 100)))
+
+    ai_muscularity = safe_num(physique.get("muscularity_score"), None)
+    ai_physique = safe_num(physique.get("physique_score"), None)
+
+    if ai_muscularity is not None:
+        ai_size_component = int(max(0, min((ai_muscularity / 15) * 100, 100)))
+    elif ai_physique is not None:
+        ai_size_component = int(max(0, min((ai_physique / 15) * 100, 100)))
+    else:
+        # Conservative baseline based on your strength/bodyweight, not a beginner score.
+        ai_size_component = 55 if bench_ratio >= 1.0 else 45
+
+    bodyweight_component = score_0_100(bodyweight, 65, 88)
+
+    size_score = int(max(
+        25,  # minimum baseline so the avatar does not look broken
+        min(
+            (ai_size_component * 0.35) +
+            (strength_size_component * 0.30) +
+            (bodyweight_component * 0.20) +
+            (volume_size_component * 0.15),
+            100
+        )
+    ))
+
+    if bf_mid is not None and safe_num(bf_mid, 0) > 0:
+        leanness_score = int(max(0, min(100, 100 - ((safe_num(bf_mid) - 8) * 6.5))))
+    else:
+        ai_lean = physique.get("leanness_score")
+        leanness_score = int(safe_num(ai_lean, 7.5) / 15 * 100)
+
+    # Conditioning: no cardio logs should mean "unlogged", not 0/100.
+    # Give a baseline, then increase from minutes/distance.
+    total_cardio_minutes = safe_num(cardio.get("minutes", 0), 0)
+    total_distance = safe_num(cardio.get("distance", 0), 0)
+
+    if total_cardio_minutes <= 0 and total_distance <= 0:
+        conditioning_score = 35
+    else:
+        conditioning_score = int(max(25, min(
+            30 + (total_cardio_minutes / 1000) * 45 + (total_distance / 100) * 25,
+            100
+        )))
+
+    ai_phys_score = safe_num(physique.get("physique_score"), 8.0) / 15 * 100
+    symmetry_score = safe_num(physique.get("symmetry_score"), 8.0) / 15 * 100
+
+    aesthetic_score = int(max(0, min((leanness_score * 0.35) + (size_score * 0.25) + (symmetry_score * 0.20) + (ai_phys_score * 0.20), 100)))
+
+    level = int(summary.get("level", 1))
+    rank = str(summary.get("rank", rank_name(level)))
+
+    if strength_score >= 75 and aesthetic_score >= 70:
+        character_class = "Aesthetic Hybrid"
+    elif leanness_score >= 80:
+        character_class = "Shredded Assassin"
+    elif strength_score >= 80:
+        character_class = "Strength Titan"
+    elif size_score >= 70:
+        character_class = "Mass Builder"
+    elif conditioning_score >= 70:
+        character_class = "Combat Athlete"
+    else:
+        character_class = "Rising Aesthetic"
+
+    if bodyweight >= 85:
+        build_type = "Heavy Frame"
+    elif bodyweight >= 78:
+        build_type = "Athletic Frame"
+    elif bodyweight >= 72:
+        build_type = "Lean Frame"
+    else:
+        build_type = "Cutting Frame"
+
+    weak_focus = "Balanced"
+    if not heat.empty and "muscle" in heat.columns and "sets" in heat.columns:
+        heat_dict = dict(zip(heat["muscle"], heat["sets"]))
+        priority_order = [
+            ("Upper Chest", "Upper chest"),
+            ("Side Delts", "Side delts"),
+            ("Back Width", "Lat width"),
+            ("Rear Delts", "Rear delts"),
+            ("Abs", "Core/abs"),
+            ("Quads", "Legs"),
+        ]
+        lowest = None
+        for muscle, label in priority_order:
+            val = int(heat_dict.get(muscle, 0))
+            if lowest is None or val < lowest[0]:
+                lowest = (val, label)
+        if lowest:
+            weak_focus = lowest[1]
+
+    return {
+        "date": str(date.today()),
+        "level": int(level),
+        "rank": str(rank),
+        "character_class": character_class,
+        "build_type": build_type,
+        "strength_score": int(strength_score),
+        "size_score": int(size_score),
+        "leanness_score": int(leanness_score),
+        "conditioning_score": int(conditioning_score),
+        "aesthetic_score": int(aesthetic_score),
+        "weak_point_focus": weak_focus,
+        "ai_summary": "",
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "bench_e1rm": float(bench),
+        "squat_e1rm": float(squat),
+        "bodyweight": float(bodyweight),
+        "bf_mid": bf_mid,
+    }
+
+
+
+def avatar_stage(level):
+    level = int(level)
+    if level >= 100:
+        return "☀️ True Adam"
+    if level >= 90:
+        return "👑 Chad"
+    if level >= 75:
+        return "🗿 Chad-Lite"
+    if level >= 60:
+        return "⚡ Elite Physique"
+    if level >= 40:
+        return "💎 Aesthetic Tier"
+    if level >= 25:
+        return "🦾 Athlete"
+    if level >= 10:
+        return "⚔️ Trainee"
+    return "🌱 Rookie"
+
+
+def render_avatar_stat(label, value):
+    value = int(max(0, min(safe_num(value, 0), 100)))
+    st.markdown(
+        f"""
+        <div class="avatar-stat">
+            <div class="avatar-stat-top">
+                <span>{label}</span>
+                <b>{value}</b>
+            </div>
+            <div class="avatar-track">
+                <div class="avatar-fill" style="--avatar-progress:{value}%;"></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def default_avatar_summary(stats):
+    return (
+        f"{stats['character_class']} build at {stats['rank']}. "
+        f"Main focus: {stats['weak_point_focus']}. "
+        f"Current profile leans strength {stats['strength_score']}/100, "
+        f"aesthetic {stats['aesthetic_score']}/100, leanness {stats['leanness_score']}/100."
+    )
+
+
+def run_ai_avatar_analysis(stats, model_name):
+    try:
+        from openai import OpenAI
+    except Exception as e:
+        return None, f"OpenAI package not installed. Error: {e}"
+
+    api_key = None
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+    except Exception:
+        api_key = None
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        return None, "Missing OPENAI_API_KEY."
+
+    client = OpenAI(api_key=api_key)
+
+    prompt = f"""
+You are creating an RPG-style fitness avatar for a male lifter.
+
+Use this data:
+{json.dumps(stats, indent=2)}
+
+Return ONLY valid JSON:
+{{
+  "character_class": "short class name",
+  "build_type": "short build archetype",
+  "weak_point_focus": "single priority",
+  "ai_summary": "2-3 sentence motivational but honest avatar description",
+  "next_evolution": "what must improve to reach the next stage",
+  "training_quest": "one practical training quest for the next 7 days"
+}}
+"""
+
+    try:
+        response = client.responses.create(
+            model=model_name,
+            input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
+        )
+        text = getattr(response, "output_text", None) or str(response)
+        data = json.loads(text.strip().replace("```json", "").replace("```", "").strip())
+        return data, None
+    except Exception as e:
+        return None, f"AI avatar analysis failed: {e}"
+
+
+
 def workout_summary(df):
     df = normalise_workout_log(df.copy())
     if df.empty:
@@ -709,21 +1518,30 @@ def workout_summary(df):
             "xp": 0, "level": get_base_level(), "rank": rank_name(get_base_level()), "base_level": get_base_level(),
             "xp_into_level": 0, "xp_needed": 500
         }
+
     df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0)
     df["reps"] = pd.to_numeric(df["reps"], errors="coerce").fillna(0)
-    total_sets = len(df[(df["weight"] > 0) & (df["reps"] > 0)])
-    total_reps = int(df["reps"].sum())
 
-    bench = df[df["exercise"] == "Barbell Bench Press (Strength)"].copy()
+    valid_sets = df[(df["weight"] > 0) & (df["reps"] > 0)].copy()
+    valid_sets = valid_sets.drop_duplicates(subset=["date", "workout", "exercise", "set"], keep="last")
+
+    total_sets = len(valid_sets)
+    total_reps = int(valid_sets["reps"].sum()) if not valid_sets.empty else 0
+
+    bench = valid_sets[valid_sets["exercise"] == "Barbell Bench Press (Strength)"].copy()
     if not bench.empty:
         bench["estimated_1rm"] = bench.apply(lambda x: estimated_1rm(float(x["weight"]), int(x["reps"])), axis=1)
         best_bench_1rm = float(bench["estimated_1rm"].max())
     else:
         best_bench_1rm = 0
 
-    cardio = load_csv(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"])
-    cardio["minutes"] = pd.to_numeric(cardio.get("minutes", 0), errors="coerce").fillna(0)
-    cardio_minutes = float(cardio["minutes"].sum()) if not cardio.empty else 0
+    cardio = load_cardio_log()
+    if not cardio.empty:
+        cardio = cardio.drop_duplicates(subset=[c for c in ["date", "type", "cardio_type", "minutes", "distance_km", "timestamp"] if c in cardio.columns], keep="last")
+        cardio["minutes"] = pd.to_numeric(cardio.get("minutes", 0), errors="coerce").fillna(0)
+        cardio_minutes = float(cardio["minutes"].sum())
+    else:
+        cardio_minutes = 0
 
     xp = int(total_sets * 10 + cardio_minutes * 2)
     base_level = get_base_level()
@@ -731,7 +1549,7 @@ def workout_summary(df):
     level = max(1, min(base_level + earned_levels, 100))
     xp_into_level = xp % 500
 
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     latest_bw = 0
     if not bw_df.empty:
         bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
@@ -744,6 +1562,62 @@ def workout_summary(df):
     }
 
 
+
+def infer_muscle_group(exercise):
+    name = str(exercise).strip()
+    if name in MUSCLE_MAP:
+        return MUSCLE_MAP[name]
+
+    lower = name.lower()
+
+    if any(x in lower for x in ["incline", "upper chest", "low-to-high"]):
+        if any(x in lower for x in ["press", "bench", "fly", "chest"]):
+            return "Upper Chest"
+
+    if any(x in lower for x in ["bench", "pec", "chest", "fly", "push-up", "push up"]):
+        return "Chest"
+
+    if any(x in lower for x in ["lateral raise", "side delt", "machine lateral", "lean-away"]):
+        return "Side Delts"
+
+    if any(x in lower for x in ["rear delt", "reverse pec", "face pull"]):
+        return "Rear Delts"
+
+    if any(x in lower for x in ["pulldown", "pull-up", "pull up", "lat pullover", "straight-arm", "straight arm", "lat"]):
+        return "Back Width"
+
+    if any(x in lower for x in ["row", "t-bar", "machine high row", "high row"]):
+        return "Back Thickness"
+
+    if any(x in lower for x in ["curl", "bicep", "preacher", "hammer"]):
+        if any(x in lower for x in ["wrist", "reverse", "farmer"]):
+            return "Forearms"
+        return "Biceps"
+
+    if any(x in lower for x in ["tricep", "pushdown", "overhead extension", "close-grip", "dip"]):
+        return "Triceps"
+
+    if any(x in lower for x in ["squat", "leg press", "leg extension", "quad", "bulgarian"]):
+        return "Quads"
+
+    if any(x in lower for x in ["leg curl", "hamstring", "romanian", "rdl", "back extension"]):
+        return "Hamstrings"
+
+    if "calf" in lower:
+        return "Calves"
+
+    if any(x in lower for x in ["adduction", "adductor"]):
+        return "Adductors"
+
+    if any(x in lower for x in ["abduction", "kickback", "hip thrust", "glute"]):
+        return "Glutes"
+
+    if any(x in lower for x in ["crunch", "sit-up", "sit up", "leg raise", "knee raise", "abs"]):
+        return "Abs"
+
+    return "Other"
+
+
 def muscle_heat_map(df):
     df = normalise_workout_log(df.copy())
     if df.empty:
@@ -751,8 +1625,16 @@ def muscle_heat_map(df):
     df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0)
     df["reps"] = pd.to_numeric(df["reps"], errors="coerce").fillna(0)
     df = df[(df["weight"] > 0) & (df["reps"] > 0)]
-    df["muscle"] = df["exercise"].map(MUSCLE_MAP).fillna("Other")
-    return df.groupby("muscle", as_index=False).size().rename(columns={"size": "sets"}).sort_values("sets", ascending=False)
+    if df.empty:
+        return pd.DataFrame(columns=["muscle", "sets"])
+    df = df.drop_duplicates(subset=["date", "workout", "exercise", "set"], keep="last")
+    df["muscle"] = df["exercise"].apply(infer_muscle_group)
+    return (
+        df.groupby("muscle", as_index=False)
+        .size()
+        .rename(columns={"size": "sets"})
+        .sort_values("sets", ascending=False)
+    )
 
 
 
@@ -778,7 +1660,7 @@ def logged_all_ppppla_days(df):
 
 
 def get_bodyweight_stats():
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     if bw_df.empty:
         return {"latest": None, "min": None, "max": None, "count": 0}
     bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
@@ -799,19 +1681,16 @@ def get_bodyweight_stats():
 
 
 def load_measurements():
-    return load_csv(
-        MEASUREMENTS_FILE,
-        [
-            "date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm",
-            "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm",
-            "shoulders_cm", "neck_cm", "notes", "timestamp"
-        ]
-    )
+    columns = ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"]
+    return df_from_supabase("measurements", MEASUREMENTS_FILE, columns)
+
 
 
 def save_measurements(row):
-    df = load_measurements()
-    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(MEASUREMENTS_FILE, index=False)
+    ok, err = sb_insert("measurements", row)
+    store_supabase_result("measurements", ok, err)
+    save_csv_backup(MEASUREMENTS_FILE, ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"], row=row)
+
 
 
 def latest_measurements():
@@ -822,19 +1701,16 @@ def latest_measurements():
 
 
 def load_physique_ratings():
-    return load_csv(
-        PHYSIQUE_RATING_FILE,
-        [
-            "date", "physique_score", "leanness_score", "symmetry_score",
-            "muscularity_score", "confidence", "weak_points", "improvements",
-            "summary", "timestamp"
-        ]
-    )
+    columns = ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"]
+    return df_from_supabase("physique_ratings", PHYSIQUE_RATING_FILE, columns)
+
 
 
 def save_physique_rating(row):
-    df = load_physique_ratings()
-    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(PHYSIQUE_RATING_FILE, index=False)
+    ok, err = sb_insert("physique_ratings", row)
+    store_supabase_result("physique_ratings", ok, err)
+    save_csv_backup(PHYSIQUE_RATING_FILE, ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"], row=row)
+
 
 
 def encode_uploaded_image(uploaded_file):
@@ -1024,11 +1900,13 @@ def save_ai_custom_plan(ai_plan):
     rows = []
     for day in ai_plan.get("days", []):
         for ex in day.get("exercises", []):
+            exercise = ex.get("exercise", "")
             rows.append({
                 "workout": day.get("day", ""),
-                "exercise": ex.get("exercise", ""),
+                "exercise": exercise,
                 "sets": ex.get("sets", ""),
                 "reps": ex.get("reps", ""),
+                "muscle": infer_muscle_group(exercise) if "infer_muscle_group" in globals() else "",
                 "reason": ex.get("reason", ""),
                 "day_goal": day.get("goal", ""),
                 "plan_name": ai_plan.get("plan_name", "AI Custom Plan"),
@@ -1038,8 +1916,14 @@ def save_ai_custom_plan(ai_plan):
     if not rows:
         return False
 
+    sb_delete_all("custom_workout_plan")
+    for row in rows:
+        ok, err = sb_insert("custom_workout_plan", row)
+        store_supabase_result("custom_workout_plan", ok, err)
+
     pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
     return True
+
 
 
 def save_fallback_custom_plan(plan):
@@ -1051,11 +1935,18 @@ def save_fallback_custom_plan(plan):
                 "exercise": exercise,
                 "sets": sets,
                 "reps": reps,
+                "muscle": infer_muscle_group(exercise) if "infer_muscle_group" in globals() else "",
                 "reason": "Fallback weak-point aesthetic plan",
                 "day_goal": "Aesthetic development",
                 "plan_name": "Fallback Aesthetic Weakpoint Plan",
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
             })
+
+    sb_delete_all("custom_workout_plan")
+    for row in rows:
+        ok, err = sb_insert("custom_workout_plan", row)
+        store_supabase_result("custom_workout_plan", ok, err)
+
     pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
 
 
@@ -1144,16 +2035,16 @@ def save_custom_plan(plan):
 
 
 def load_custom_plan():
-    return load_csv(CUSTOM_PLAN_FILE, ["workout", "exercise", "sets", "reps", "reason", "day_goal", "plan_name", "timestamp"])
+    columns = ["workout", "exercise", "sets", "reps", "reason", "day_goal", "plan_name", "timestamp"]
+    return df_from_supabase("custom_workout_plan", CUSTOM_PLAN_FILE, columns)
 
 
 
 def save_bodyfat_estimate(row):
-    """
-    Saves one body fat estimate row to bodyfat_log.csv.
-    """
-    df = load_bodyfat_log()
-    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(BODYFAT_FILE, index=False)
+    ok, err = sb_insert("bodyfat_log", row)
+    store_supabase_result("bodyfat_log", ok, err)
+    save_csv_backup(BODYFAT_FILE, ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"], row=row)
+
 
 
 def bodyfat_outputs(weight_kg, bf_percent, target_bf=10.0):
@@ -1301,13 +2192,9 @@ def navy_body_fat_male(height_cm, waist_cm, neck_cm):
         return None
 
 def load_bodyfat_log():
-    return load_csv(
-        BODYFAT_FILE,
-        [
-            "date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm",
-            "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"
-        ]
-    )
+    columns = ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"]
+    return df_from_supabase("bodyfat_log", BODYFAT_FILE, columns)
+
 
 
 def get_bodyfat_stats():
@@ -1326,7 +2213,7 @@ def get_bodyfat_stats():
 
 
 def get_cardio_stats():
-    cardio = load_csv(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"])
+    cardio = load_cardio_log()
     if cardio.empty:
         return {"minutes": 0, "distance": 0, "count": 0, "types": set()}
     cardio["minutes"] = pd.to_numeric(cardio.get("minutes", 0), errors="coerce").fillna(0)
@@ -1446,15 +2333,15 @@ def check_achievements():
     if "Boxing" in cardio["types"]: unlock("boxing_logged")
 
     # Muscle heat map / volume
-    if muscle_sets_count(heat, ["Chest"]) >= 50: unlock("chest_50")
-    if muscle_sets_count(heat, ["Chest"]) >= 150: unlock("chest_150")
-    if muscle_sets_count(heat, ["Back"]) >= 50: unlock("back_50")
-    if muscle_sets_count(heat, ["Back"]) >= 150: unlock("back_150")
-    delt_sets = muscle_sets_count(heat, ["Delts", "Rear Delts"])
+    if muscle_sets_count(heat, ["Chest", "Upper Chest"]) >= 50: unlock("chest_50")
+    if muscle_sets_count(heat, ["Chest", "Upper Chest"]) >= 150: unlock("chest_150")
+    if muscle_sets_count(heat, ["Back", "Back Width", "Back Thickness"]) >= 50: unlock("back_50")
+    if muscle_sets_count(heat, ["Back", "Back Width", "Back Thickness"]) >= 150: unlock("back_150")
+    delt_sets = muscle_sets_count(heat, ["Delts", "Side Delts", "Rear Delts"])
     if delt_sets >= 50: unlock("delts_50")
     if delt_sets >= 150: unlock("delts_150")
     if muscle_sets_count(heat, ["Biceps", "Triceps"]) >= 100: unlock("arms_100")
-    if muscle_sets_count(heat, ["Legs", "Calves"]) >= 100: unlock("legs_100")
+    if muscle_sets_count(heat, ["Legs", "Quads", "Hamstrings", "Glutes", "Adductors", "Calves"]) >= 100: unlock("legs_100")
     if muscle_sets_count(heat, ["Abs"]) >= 50: unlock("abs_50")
 
     # Rank achievements
@@ -1545,7 +2432,7 @@ def get_target(target_type, name):
 
 
 def latest_bodyweight_value():
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     if bw_df.empty:
         return None
     bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
@@ -1856,7 +2743,942 @@ Return ONLY valid JSON:
     except Exception as e:
         return None, f"AI custom plan failed: {e}"
 
-st.set_page_config(page_title=APP_TITLE, layout="centered")
+
+# ============================================================
+# FINAL SAFETY HELPERS — DO NOT REMOVE
+# ============================================================
+
+def load_bodyfat_log():
+    return load_csv(
+        BODYFAT_FILE,
+        [
+            "date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm",
+            "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"
+        ],
+    )
+
+
+def save_bodyfat_estimate(row):
+    df = load_bodyfat_log()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(BODYFAT_FILE, index=False)
+
+
+def bodyfat_outputs(weight_kg, bf_percent, target_bf=10.0):
+    try:
+        weight_kg = float(weight_kg)
+        bf_percent = float(bf_percent)
+        target_bf = float(target_bf)
+        if weight_kg <= 0 or bf_percent <= 0 or target_bf <= 0 or target_bf >= 100:
+            return None, None, None, None
+        fat_mass = weight_kg * (bf_percent / 100)
+        lean_mass = weight_kg - fat_mass
+        target_weight = lean_mass / (1 - target_bf / 100)
+        fat_to_lose = max(weight_kg - target_weight, 0)
+        return fat_mass, lean_mass, target_weight, fat_to_lose
+    except Exception:
+        return None, None, None, None
+
+
+def safe_kg(value):
+    if value is None:
+        return "No data"
+    try:
+        return f"{float(value):.1f}kg"
+    except Exception:
+        return "No data"
+
+
+def load_targets():
+    return load_csv(TARGETS_FILE, ["target_type", "name", "target_value", "unit", "created_at", "notes"])
+
+
+def save_or_update_target(target_type, name, target_value, unit, notes=""):
+    df = load_targets()
+    if not df.empty:
+        df["target_type"] = df["target_type"].astype(str)
+        df["name"] = df["name"].astype(str)
+        df = df.loc[~((df["target_type"] == str(target_type)) & (df["name"] == str(name)))].copy()
+
+    new_row = {
+        "target_type": target_type,
+        "name": name,
+        "target_value": float(target_value),
+        "unit": unit,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "notes": notes,
+    }
+    pd.concat([df, pd.DataFrame([new_row])], ignore_index=True).to_csv(TARGETS_FILE, index=False)
+
+
+def get_target(target_type, name):
+    df = load_targets()
+    if df.empty:
+        return None
+    matches = df[
+        (df["target_type"].astype(str) == str(target_type)) &
+        (df["name"].astype(str) == str(name))
+    ]
+    if matches.empty:
+        return None
+    try:
+        return float(matches.iloc[-1]["target_value"])
+    except Exception:
+        return None
+
+
+def latest_bodyweight_value():
+    bw_df = load_bodyweight_log()
+    if bw_df.empty:
+        return None
+    bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
+    valid = bw_df[bw_df["bodyweight"] > 0]
+    if valid.empty:
+        return None
+    return float(valid.iloc[-1]["bodyweight"])
+
+
+def latest_bodyfat_mid():
+    bf_df = load_bodyfat_log()
+    if bf_df.empty:
+        return None
+    bf_df["bf_mid"] = pd.to_numeric(bf_df["bf_mid"], errors="coerce").fillna(0)
+    valid = bf_df[bf_df["bf_mid"] > 0]
+    if valid.empty:
+        return None
+    return float(valid.iloc[-1]["bf_mid"])
+
+
+def current_exercise_best_1rm(exercise_name):
+    df = load_log()
+    if df.empty:
+        return 0
+    df = normalise_workout_log(df)
+    ex = df[df["exercise"].astype(str) == str(exercise_name)].copy()
+    if ex.empty:
+        return 0
+    ex["weight"] = pd.to_numeric(ex["weight"], errors="coerce").fillna(0)
+    ex["reps"] = pd.to_numeric(ex["reps"], errors="coerce").fillna(0)
+    ex["estimated_1rm"] = ex.apply(
+        lambda x: estimated_1rm(float(x["weight"]), int(x["reps"])),
+        axis=1,
+    )
+    return float(ex["estimated_1rm"].max())
+
+
+def render_target_bar(title, current, target, unit, lower_is_better=False):
+    if current is None or target is None:
+        st.info(f"{title}: Set a target to begin.")
+        return
+
+    try:
+        current = float(current)
+        target = float(target)
+    except Exception:
+        st.info(f"{title}: Waiting for valid target/data.")
+        return
+
+    if target <= 0:
+        st.info(f"{title}: Target must be above 0.")
+        return
+
+    if lower_is_better:
+        progress = 100 if current <= target else (target / current) * 100
+    else:
+        progress = (current / target) * 100
+
+    progress = max(0, min(progress, 100))
+
+    st.markdown(
+        f"""
+        <div class="mission-card">
+            <div class="mission-title">{title}</div>
+            <div class="progress-track">
+                <div class="progress-fill" style="--progress:{progress:.1f}%;"></div>
+            </div>
+            <div class="progress-label">{current:.1f}{unit} / {target:.1f}{unit} ({progress:.0f}%)</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def encode_image_for_openai(uploaded_file):
+    data = uploaded_file.getvalue()
+    mime = uploaded_file.type or "image/jpeg"
+    encoded = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime};base64,{encoded}"
+
+
+def encode_uploaded_image(uploaded_file):
+    return encode_image_for_openai(uploaded_file)
+
+
+def _get_openai_client():
+    try:
+        from openai import OpenAI
+    except Exception as e:
+        return None, f"OpenAI package not installed. Add 'openai' to requirements.txt. Error: {e}"
+
+    api_key = None
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+    except Exception:
+        api_key = None
+
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None, "Missing OPENAI_API_KEY. Add it to Streamlit Cloud secrets."
+
+    return OpenAI(api_key=api_key), None
+
+
+def run_ai_bodyfat_estimate(front_photo, back_photo, height_cm, weight_kg, waist_cm, neck_cm, lighting, pump_status, time_of_day, model_name):
+    client, err = _get_openai_client()
+    if err:
+        return None, err
+    if front_photo is None and back_photo is None:
+        return None, "Upload at least one physique photo."
+
+    user_text = f"""
+Estimate male body fat percentage from physique photos for a fitness tracking app.
+Return ONLY valid JSON.
+
+Stats:
+- Height: {height_cm} cm
+- Bodyweight: {weight_kg} kg
+- Waist: {waist_cm if waist_cm and waist_cm > 0 else "Not provided"}
+- Neck: {neck_cm if neck_cm and neck_cm > 0 else "Not provided"}
+- Lighting: {lighting}
+- Pump status: {pump_status}
+- Time of day: {time_of_day}
+
+Do not use waist or neck unless provided. Be conservative with flattering lighting or pump.
+
+JSON schema:
+{{
+  "bf_low": number,
+  "bf_high": number,
+  "bf_mid": number,
+  "confidence": "low" | "medium" | "high",
+  "notes": "short practical explanation",
+  "fat_storage": "short note",
+  "ten_percent_notes": "short note"
+}}
+"""
+
+    content = [{"type": "input_text", "text": user_text}]
+    if front_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_image_for_openai(front_photo)})
+    if back_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_image_for_openai(back_photo)})
+
+    try:
+        response = client.responses.create(model=model_name, input=[{"role": "user", "content": content}])
+        text = getattr(response, "output_text", None) or str(response)
+        data = json.loads(text.strip().replace("```json", "").replace("```", "").strip())
+        for key in ["bf_low", "bf_high", "bf_mid", "confidence", "notes"]:
+            if key not in data:
+                return None, f"AI response missing key: {key}. Raw response: {text[:500]}"
+        return data, None
+    except Exception as e:
+        return None, f"AI estimate failed: {e}"
+
+
+def load_measurements():
+    return load_csv(
+        MEASUREMENTS_FILE,
+        ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm",
+         "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm",
+         "shoulders_cm", "neck_cm", "notes", "timestamp"],
+    )
+
+
+def save_measurements(row):
+    df = load_measurements()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(MEASUREMENTS_FILE, index=False)
+
+
+def latest_measurements():
+    df = load_measurements()
+    if df.empty:
+        return {}
+    return df.iloc[-1].to_dict()
+
+
+def load_physique_ratings():
+    return load_csv(
+        PHYSIQUE_RATING_FILE,
+        ["date", "physique_score", "leanness_score", "symmetry_score",
+         "muscularity_score", "confidence", "weak_points", "improvements",
+         "summary", "timestamp"],
+    )
+
+
+def save_physique_rating(row):
+    df = load_physique_ratings()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(PHYSIQUE_RATING_FILE, index=False)
+
+
+def run_ai_physique_rating(front_photo, side_photo, back_photo, stats, model_name):
+    client, err = _get_openai_client()
+    if err:
+        return None, err
+    if front_photo is None and side_photo is None and back_photo is None:
+        return None, "Upload at least one physique photo."
+
+    user_text = f"""
+Rate this male physique for an aesthetic fitness app. Do not identify the person.
+Return ONLY valid JSON.
+
+Stats:
+{json.dumps(stats, indent=2)}
+
+JSON schema:
+{{
+  "physique_score": number,
+  "leanness_score": number,
+  "symmetry_score": number,
+  "muscularity_score": number,
+  "confidence": "low" | "medium" | "high",
+  "weak_points": ["short point", "short point", "short point"],
+  "improvements": ["short actionable improvement", "short actionable improvement", "short actionable improvement"],
+  "summary": "short honest summary",
+  "training_priority": ["Chest", "Side delts", "Back width", "Arms", "Legs", "Abs"]
+}}
+
+Scores are out of 15. Be realistic and useful.
+"""
+
+    content = [{"type": "input_text", "text": user_text}]
+    if front_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(front_photo)})
+    if side_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(side_photo)})
+    if back_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(back_photo)})
+
+    try:
+        response = client.responses.create(model=model_name, input=[{"role": "user", "content": content}])
+        text = getattr(response, "output_text", None) or str(response)
+        data = json.loads(text.strip().replace("```json", "").replace("```", "").strip())
+        for key in ["physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary"]:
+            if key not in data:
+                return None, f"AI response missing key: {key}. Raw response: {text[:500]}"
+        return data, None
+    except Exception as e:
+        return None, f"AI physique rating failed: {e}"
+
+
+def load_custom_plan():
+    return load_csv(CUSTOM_PLAN_FILE, ["workout", "exercise", "sets", "reps", "reason", "day_goal", "plan_name", "timestamp"])
+
+
+def save_ai_custom_plan(ai_plan):
+    rows = []
+    for day in ai_plan.get("days", []):
+        for ex in day.get("exercises", []):
+            rows.append({
+                "workout": day.get("day", ""),
+                "exercise": ex.get("exercise", ""),
+                "sets": ex.get("sets", ""),
+                "reps": ex.get("reps", ""),
+                "reason": ex.get("reason", ""),
+                "day_goal": day.get("goal", ""),
+                "plan_name": ai_plan.get("plan_name", "AI Custom Plan"),
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+    if not rows:
+        return False
+    pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
+    return True
+
+
+def save_fallback_custom_plan(plan):
+    rows = []
+    for workout, exercises in plan.items():
+        for exercise, sets, reps in exercises:
+            rows.append({
+                "workout": workout,
+                "exercise": exercise,
+                "sets": sets,
+                "reps": reps,
+                "reason": "Fallback weak-point aesthetic plan",
+                "day_goal": "Aesthetic development",
+                "plan_name": "Fallback Aesthetic Weakpoint Plan",
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+    pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
+
+
+def run_ai_custom_plan_from_physique(rating, measurements, goals, model_name):
+    client, err = _get_openai_client()
+    if err:
+        return None, err
+
+    prompt = f"""
+You are an expert bodybuilding coach making a custom workout plan for an aesthetic-focused lifter.
+
+DO NOT simply repeat the user's current PPPPLA routine.
+Choose exercises from this exercise library:
+{json.dumps(EXERCISE_LIBRARY, indent=2)}
+
+Physique rating:
+{json.dumps(rating, indent=2)}
+
+Measurements:
+{json.dumps(measurements, indent=2)}
+
+Goal:
+{goals}
+
+Create a 6-day split:
+Push 1 - Strength Bias
+Pull 1 - Width Bias
+Push 2 - Hypertrophy Bias
+Pull 2 - Thickness Bias
+Legs
+Aesthetic Weakpoint Day
+
+Each day: 5-8 exercises. Include exercise, sets, reps, reason.
+Return ONLY valid JSON:
+{{
+  "plan_name": "string",
+  "rationale": "short summary",
+  "weekly_focus": ["focus 1", "focus 2", "focus 3"],
+  "days": [
+    {{
+      "day": "Push 1 - Strength Bias",
+      "goal": "short day goal",
+      "exercises": [
+        {{"exercise": "exercise name", "sets": 3, "reps": "8-12", "reason": "why selected"}}
+      ]
+    }}
+  ]
+}}
+"""
+    try:
+        response = client.responses.create(model=model_name, input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}])
+        text = getattr(response, "output_text", None) or str(response)
+        data = json.loads(text.strip().replace("```json", "").replace("```", "").strip())
+        if "days" not in data:
+            return None, f"AI response missing 'days'. Raw: {text[:500]}"
+        return data, None
+    except Exception as e:
+        return None, f"AI custom plan failed: {e}"
+
+
+
+# ============================================================
+# ONBOARDING / PROFILE CALIBRATION
+# ============================================================
+
+def profile_is_complete():
+    profile = load_profile()
+    if profile.empty:
+        return False
+
+    latest = profile.iloc[-1]
+
+    # New profile format
+    if "onboarding_complete" in latest:
+        val = latest.get("onboarding_complete", False)
+        if str(val).lower() in ["true", "1", "yes", "complete"]:
+            return True
+
+    # Backward compatibility: old profile counts as complete if it has a useful base level or stats.
+    try:
+        if float(latest.get("base_level", 0)) > 1:
+            return True
+    except Exception:
+        pass
+
+    try:
+        if float(latest.get("height_cm", 0)) > 0 and float(latest.get("bodyweight_kg", 0)) > 0:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def should_show_onboarding():
+    if st.session_state.get("force_onboarding", False):
+        return True
+    return not profile_is_complete()
+
+
+def detect_onboarding_defaults():
+    summary = workout_summary(load_log())
+    latest_bw = latest_bodyweight_value()
+    latest_bf = latest_bodyfat_mid()
+
+    bench = current_exercise_best_1rm("Barbell Bench Press (Strength)")
+    if bench <= 0:
+        bench = max(
+            current_exercise_best_1rm("Barbell Bench Press"),
+            current_exercise_best_1rm("Paused Barbell Bench Press"),
+        )
+
+    squat = current_exercise_best_1rm("Barbell Back Squat")
+
+    physique = latest_physique_rating_values() if "latest_physique_rating_values" in globals() else {}
+
+    profile = load_profile()
+    latest_profile = profile.iloc[-1].to_dict() if not profile.empty else {}
+
+    return {
+        "height_cm": safe_num(latest_profile.get("height_cm", 183.5), 183.5),
+        "bodyweight_kg": safe_num(latest_profile.get("bodyweight_kg", latest_bw or summary.get("latest_bw", 77.0)), latest_bw or 77.0),
+        "bench_e1rm": safe_num(latest_profile.get("bench_e1rm", bench), bench),
+        "squat_e1rm": safe_num(latest_profile.get("squat_e1rm", squat), squat),
+        "training_years": safe_num(latest_profile.get("training_years", 3), 3),
+        "physique_score": safe_num(latest_profile.get("physique_score", physique.get("physique_score", 9)), 9),
+        "leanness_score": safe_num(latest_profile.get("leanness_score", physique.get("leanness_score", 8)), 8),
+        "bodyfat": latest_bf,
+        "goal": str(latest_profile.get("goal", "Get leaner while maintaining strength") or "Get leaner while maintaining strength"),
+        "current_phase": str(latest_profile.get("current_phase", "Cut") or "Cut"),
+        "focus_areas": str(latest_profile.get("focus_areas", "Upper chest, side delts, lat width, abs") or "Upper chest, side delts, lat width, abs"),
+    }
+
+
+def render_onboarding_screen():
+    defaults = detect_onboarding_defaults()
+
+    st.markdown("""
+    <div class="onboarding-shell">
+        <div class="onboarding-badge">PROFILE CALIBRATION</div>
+        <div class="onboarding-title">Set up Tyson Training</div>
+        <div class="onboarding-subtitle">
+            Existing workout, bodyweight, body fat and PR data has been detected and pre-filled.
+            Confirm it once so levels, avatar stats and AI coaching are calibrated properly.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    detected = {
+        "Detected bodyweight": f"{defaults['bodyweight_kg']:.1f}kg",
+        "Detected bench e1RM": f"{defaults['bench_e1rm']:.1f}kg",
+        "Detected squat e1RM": f"{defaults['squat_e1rm']:.1f}kg",
+        "Detected body fat": f"{defaults['bodyfat']:.1f}%" if defaults["bodyfat"] else "No body fat log yet",
+    }
+
+    cols = st.columns(4)
+    for i, (label, value) in enumerate(detected.items()):
+        with cols[i]:
+            compact_metric(label, value, "from existing data")
+
+    st.divider()
+
+    with st.form("onboarding_profile_form"):
+        st.subheader("Confirm your profile")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            height_cm = st.number_input("Height (cm)", min_value=120.0, max_value=230.0, value=float(defaults["height_cm"]), step=0.5)
+            bodyweight_kg = st.number_input("Current bodyweight (kg)", min_value=35.0, max_value=180.0, value=float(defaults["bodyweight_kg"]), step=0.1)
+            bench_e1rm = st.number_input("Bench estimated 1RM (kg)", min_value=0.0, max_value=300.0, value=float(defaults["bench_e1rm"]), step=2.5)
+            squat_e1rm = st.number_input("Squat estimated 1RM (kg)", min_value=0.0, max_value=400.0, value=float(defaults["squat_e1rm"]), step=2.5)
+
+        with c2:
+            training_years = st.number_input("Training age (years)", min_value=0.0, max_value=20.0, value=float(defaults["training_years"]), step=0.5)
+            physique_score = st.slider("Current physique score /15", 1, 15, int(max(1, min(defaults["physique_score"], 15))))
+            leanness_score = st.slider("Current leanness score /15", 1, 15, int(max(1, min(defaults["leanness_score"], 15))))
+            current_phase = st.selectbox(
+                "Current phase",
+                ["Cut", "Maintain", "Lean Bulk", "Bulk", "Recomp"],
+                index=["Cut", "Maintain", "Lean Bulk", "Bulk", "Recomp"].index(defaults["current_phase"]) if defaults["current_phase"] in ["Cut", "Maintain", "Lean Bulk", "Bulk", "Recomp"] else 0,
+            )
+
+        goal = st.text_input("Main goal", value=defaults["goal"])
+        focus_areas = st.text_input("Focus areas", value=defaults["focus_areas"])
+
+        submitted = st.form_submit_button("Save Profile & Enter App", type="primary", use_container_width=True)
+
+    if submitted:
+        level = save_profile(
+            height_cm=height_cm,
+            bodyweight_kg=bodyweight_kg,
+            bench_e1rm=bench_e1rm,
+            squat_e1rm=squat_e1rm,
+            training_years=training_years,
+            physique_score=physique_score,
+            leanness_score=leanness_score,
+            goal=goal,
+            current_phase=current_phase,
+            focus_areas=focus_areas,
+            onboarding_complete=True,
+        )
+        st.session_state.force_onboarding = False
+        st.session_state.just_saved_message = f"PROFILE CALIBRATED — LEVEL {level}"
+        clear_data_cache()
+        st.rerun()
+
+    with st.expander("Already set up?"):
+        st.write("You can skip this if your profile is already correct. Your existing workout data will not be deleted.")
+        if st.button("Skip for now", use_container_width=True):
+            st.session_state.force_onboarding = False
+            st.session_state.just_saved_message = "ONBOARDING SKIPPED"
+            st.rerun()
+
+
+
+# ============================================================
+# UI HELPERS
+# ============================================================
+
+def ui_toast_area():
+    if st.session_state.get("just_saved_message"):
+        st.markdown(
+            f"""
+            <div class="floating-toast save-toast">
+                ✅ {st.session_state.get("just_saved_message")}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.session_state.just_saved_message = ""
+
+    if st.session_state.get("pr_message"):
+        st.markdown(
+            f"""
+            <div class="floating-toast pr-toast">
+                🏆 PR DETECTED — {st.session_state.get("pr_message")}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.session_state.pr_message = ""
+
+    if st.session_state.get("achievement_message"):
+        st.markdown(
+            f"""
+            <div class="floating-toast achievement-toast">
+                🎖️ {st.session_state.get("achievement_message")}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.session_state.achievement_message = ""
+
+
+def page_hero(title, subtitle="", badge=""):
+    badge_html = f'<div class="hero-badge">{badge}</div>' if badge else ""
+    st.markdown(
+        f"""
+        <div class="hero-panel">
+            <div>
+                <div class="hero-title">{title}</div>
+                <div class="hero-subtitle">{subtitle}</div>
+            </div>
+            {badge_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def section_card(title, body="", icon=""):
+    st.markdown(
+        f"""
+        <div class="section-card">
+            <div class="section-card-title">{icon} {title}</div>
+            <div class="section-card-body">{body}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def compact_metric(label, value, helper=""):
+    st.markdown(
+        f"""
+        <div class="compact-metric">
+            <div class="compact-label">{label}</div>
+            <div class="compact-value">{value}</div>
+            <div class="compact-helper">{helper}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
+st.set_page_config(page_title=APP_TITLE, layout="wide")
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   SEAMLESS BLUE COMMAND UI
+============================================================ */
+
+:root {
+    --bg0:#020617;
+    --bg1:#071426;
+    --bg2:#0b1d3a;
+    --blue:#38bdf8;
+    --blue2:#0ea5e9;
+    --text:#eaf7ff;
+    --muted:#8fb8d6;
+    --panel:rgba(8,18,34,.72);
+    --panel2:rgba(15,39,68,.72);
+}
+
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(circle at 10% 0%, rgba(56,189,248,.23), transparent 28%),
+        radial-gradient(circle at 90% 10%, rgba(14,165,233,.18), transparent 30%),
+        linear-gradient(135deg, var(--bg0), var(--bg1) 45%, var(--bg0)) !important;
+    background-size: 160% 160%;
+    animation: bgShift 16s ease infinite;
+}
+
+@keyframes bgShift {
+    0% { background-position: 0% 25%; }
+    50% { background-position: 100% 75%; }
+    100% { background-position: 0% 25%; }
+}
+
+[data-testid="stMainBlockContainer"] {
+    padding-top: 1.5rem;
+    padding-bottom: 4rem;
+    max-width: 1320px;
+}
+
+section[data-testid="stSidebar"] {
+    background:
+        linear-gradient(180deg, rgba(2,6,23,.98), rgba(7,20,38,.96)) !important;
+    border-right: 1px solid rgba(56,189,248,.18);
+}
+
+.side-brand {
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:14px 10px 18px 10px;
+    margin-bottom:4px;
+    border-radius:18px;
+    background:linear-gradient(135deg, rgba(56,189,248,.14), rgba(14,165,233,.04));
+    box-shadow:0 0 20px rgba(56,189,248,.08);
+}
+
+.side-logo {
+    width:42px;
+    height:42px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:14px;
+    background:linear-gradient(135deg, #075985, #38bdf8);
+    box-shadow:0 0 20px rgba(56,189,248,.35);
+    font-size:22px;
+}
+
+.side-title {
+    font-weight:900;
+    letter-spacing:.08em;
+    color:#eaf7ff;
+    font-size:.92rem;
+}
+
+.side-sub {
+    color:#7dd3fc;
+    font-size:.75rem;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+}
+
+.hero-panel {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:20px;
+    padding:24px 26px;
+    margin:0 0 22px 0;
+    border-radius:28px;
+    background:
+        linear-gradient(135deg, rgba(15,39,68,.88), rgba(2,6,23,.86)),
+        radial-gradient(circle at 15% 20%, rgba(56,189,248,.22), transparent 28%);
+    border:1px solid rgba(56,189,248,.16);
+    box-shadow:
+        0 18px 50px rgba(0,0,0,.28),
+        0 0 34px rgba(56,189,248,.12),
+        inset 0 0 28px rgba(56,189,248,.045);
+    animation: heroIn .75s cubic-bezier(.18,.89,.32,1.28);
+}
+
+@keyframes heroIn {
+    from { opacity:0; transform:translateY(-18px) scale(.985); filter:blur(8px); }
+    to { opacity:1; transform:translateY(0) scale(1); filter:blur(0); }
+}
+
+.hero-title {
+    color:#eaf7ff;
+    font-size:2.0rem;
+    line-height:1.05;
+    font-weight:950;
+    letter-spacing:-.04em;
+    text-shadow:0 0 20px rgba(56,189,248,.32);
+}
+
+.hero-subtitle {
+    color:#8fb8d6;
+    margin-top:8px;
+    font-size:.98rem;
+}
+
+.hero-badge {
+    color:#020617;
+    background:linear-gradient(90deg, #7dd3fc, #38bdf8);
+    padding:10px 14px;
+    border-radius:999px;
+    font-weight:900;
+    box-shadow:0 0 24px rgba(56,189,248,.24);
+    white-space:nowrap;
+}
+
+.compact-metric,
+.section-card,
+.mission-card,
+.nw-exercise-card,
+div[data-testid="stMetric"],
+div[data-testid="stExpander"] {
+    border-radius:22px !important;
+    background:linear-gradient(145deg, rgba(15,39,68,.72), rgba(2,6,23,.76)) !important;
+    border:1px solid rgba(56,189,248,.12) !important;
+    box-shadow:
+        0 10px 34px rgba(0,0,0,.24),
+        inset 0 0 16px rgba(56,189,248,.035) !important;
+    transition:transform .22s ease, box-shadow .22s ease, border-color .22s ease;
+}
+
+.compact-metric:hover,
+.section-card:hover,
+.mission-card:hover,
+.nw-exercise-card:hover,
+div[data-testid="stMetric"]:hover {
+    transform:translateY(-3px);
+    border-color:rgba(56,189,248,.25) !important;
+    box-shadow:0 16px 42px rgba(0,0,0,.30), 0 0 24px rgba(56,189,248,.14) !important;
+}
+
+.compact-metric {
+    padding:18px 20px;
+}
+
+.compact-label {
+    color:#8fb8d6;
+    font-size:.78rem;
+    text-transform:uppercase;
+    letter-spacing:.12em;
+    font-weight:800;
+}
+
+.compact-value {
+    color:#eaf7ff;
+    font-size:1.7rem;
+    font-weight:950;
+    margin-top:6px;
+}
+
+.compact-helper {
+    color:#7dd3fc;
+    font-size:.82rem;
+    margin-top:4px;
+}
+
+.section-card {
+    padding:18px 20px;
+    margin:10px 0;
+}
+
+.section-card-title {
+    font-size:1rem;
+    color:#eaf7ff;
+    font-weight:900;
+    margin-bottom:6px;
+}
+
+.section-card-body {
+    color:#8fb8d6;
+    font-size:.92rem;
+}
+
+.stButton button {
+    border-radius:14px !important;
+    border:0 !important;
+    background:linear-gradient(90deg, #075985, #0ea5e9, #38bdf8) !important;
+    color:#02131f !important;
+    font-weight:900 !important;
+    box-shadow:0 0 18px rgba(56,189,248,.20);
+    transition:all .18s ease;
+}
+
+.stButton button:hover {
+    transform:translateY(-1px);
+    box-shadow:0 0 28px rgba(56,189,248,.36);
+}
+
+[data-baseweb="select"] > div,
+input,
+textarea {
+    border-radius:14px !important;
+    background:rgba(2,6,23,.68) !important;
+    border-color:rgba(56,189,248,.16) !important;
+    color:#eaf7ff !important;
+}
+
+.floating-toast {
+    position:fixed;
+    right:24px;
+    bottom:24px;
+    z-index:999999;
+    padding:14px 18px;
+    border-radius:18px;
+    font-weight:900;
+    color:#eaf7ff;
+    background:rgba(2,6,23,.92);
+    border:1px solid rgba(56,189,248,.28);
+    box-shadow:0 0 28px rgba(56,189,248,.24);
+    animation: toastIn 3.2s ease forwards;
+}
+
+@keyframes toastIn {
+    0% { opacity:0; transform:translateY(16px) scale(.98); }
+    12% { opacity:1; transform:translateY(0) scale(1); }
+    82% { opacity:1; transform:translateY(0) scale(1); }
+    100% { opacity:0; transform:translateY(12px) scale(.98); }
+}
+
+.save-toast { border-color:rgba(34,197,94,.38); box-shadow:0 0 28px rgba(34,197,94,.18); }
+.pr-toast { border-color:rgba(250,204,21,.45); box-shadow:0 0 28px rgba(250,204,21,.20); }
+.achievement-toast { border-color:rgba(168,85,247,.45); box-shadow:0 0 28px rgba(168,85,247,.20); }
+
+.progress-track {
+    border-radius:999px !important;
+    overflow:hidden;
+    background:rgba(2,6,23,.8) !important;
+    border:1px solid rgba(56,189,248,.12);
+}
+
+.progress-fill {
+    background:linear-gradient(90deg, #075985, #38bdf8, #7dd3fc) !important;
+    background-size:200% 100%;
+    animation: progressMove 1.8s linear infinite;
+}
+
+@keyframes progressMove {
+    from { background-position:0% 0%; }
+    to { background-position:200% 0%; }
+}
+
+hr {
+    border-color:rgba(56,189,248,.12) !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
 
 st.markdown("""
 <style>
@@ -1939,33 +3761,138 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-page = st.sidebar.radio("Menu", ["Home", "Profile", "Physique", "Measurements", "Today", "Cardio", "Progress", "Goals", "Achievements", "Body Fat", "Bodyweight", "Delete Data", "Routine"])
-st.markdown(f'<div class="page-transition">⚡ {page} module loaded</div>', unsafe_allow_html=True)
+# ============================================================
+# iOS STYLE PRIMARY NAVIGATION
+# ============================================================
 
-for key in ["just_saved_message", "pr_message", "achievement_message"]:
-    if key not in st.session_state:
-        st.session_state[key] = ""
+PRIMARY_PAGES = ["Home", "Today", "Avatar", "Progress", "Physique", "Cardio", "Goals", "Data Manager"]
+MORE_PAGES = ["Profile", "Onboarding", "Measurements", "Achievements", "Body Fat", "Bodyweight", "Routine", "Delete Data"]
+ALL_PAGES = PRIMARY_PAGES + MORE_PAGES
 
-if st.session_state.just_saved_message:
-    st.markdown(f"""<div class="save-banner"><div class="save-banner-title">⚡ {st.session_state.just_saved_message}</div><div class="save-banner-sub">Training log synced • progression updated</div></div>""", unsafe_allow_html=True)
-    st.session_state.just_saved_message = ""
+if "active_page" not in st.session_state:
+    st.session_state.active_page = "Home"
 
-if st.session_state.pr_message:
-    st.markdown(f"""<div class="pr-banner"><div class="save-banner-title">🏆 {st.session_state.pr_message}</div><div class="save-banner-sub">New performance record detected</div></div>""", unsafe_allow_html=True)
-    st.session_state.pr_message = ""
+PERFORMANCE_MODE = st.sidebar.toggle("Performance mode", value=True, help="Keeps the glow style but reduces the heaviest animations/database refresh lag.")
 
-if st.session_state.achievement_message:
-    st.markdown(f"""<div class="achievement-banner"><div class="save-banner-title">🎖 ACHIEVEMENT UNLOCKED</div><div class="save-banner-sub">{st.session_state.achievement_message}</div></div>""", unsafe_allow_html=True)
-    st.session_state.achievement_message = ""
+st.sidebar.markdown("""
+<div class="side-brand">
+    <div class="side-logo">⚡</div>
+    <div>
+        <div class="side-title">TYSON TRAINING</div>
+        <div class="side-sub">iOS Fitness OS</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# Sidebar remains as a backup only.
+sidebar_page = st.sidebar.selectbox(
+    "Backup menu",
+    ALL_PAGES,
+    index=ALL_PAGES.index(st.session_state.active_page) if st.session_state.active_page in ALL_PAGES else 0,
+)
+if sidebar_page != st.session_state.active_page:
+    st.session_state.active_page = sidebar_page
+    st.rerun()
+
+st.markdown("""
+<div class="mobile-app-topbar">
+    <div class="app-title-wrap">
+        <div class="app-icon">⚡</div>
+        <div>
+            <div class="app-title">Training Tracker</div>
+            <div class="app-subtitle">Fitness OS</div>
+        </div>
+    </div>
+    <div class="app-status-pill">Live</div>
+</div>
+""", unsafe_allow_html=True)
+
+nav_cols = st.columns(len(PRIMARY_PAGES))
+nav_labels = {
+    "Home": "🏠 Home",
+    "Today": "🏋️ Workout",
+    "Avatar": "🧬 Avatar",
+    "Progress": "📈 Progress",
+    "Physique": "🤖 AI Coach",
+    "Cardio": "🫀 Cardio",
+    "Goals": "🎯 Goals",
+    "Data Manager": "📂 Data",
+}
+for col, page_name in zip(nav_cols, PRIMARY_PAGES):
+    with col:
+        button_type = "primary" if st.session_state.active_page == page_name else "secondary"
+        if st.button(nav_labels[page_name], key=f"top_nav_{page_name}", use_container_width=True, type=button_type):
+            st.session_state.active_page = page_name
+            st.rerun()
+
+with st.expander("Other Features", expanded=False):
+    more_cols = st.columns(4)
+    for i, page_name in enumerate(MORE_PAGES):
+        with more_cols[i % 4]:
+            button_type = "primary" if st.session_state.active_page == page_name else "secondary"
+            if st.button(page_name, key=f"more_nav_{page_name}", use_container_width=True, type=button_type):
+                st.session_state.active_page = page_name
+                st.rerun()
+
+page = st.session_state.active_page
+
+if PERFORMANCE_MODE:
+    st.markdown("""
+    <style>
+    /* Balanced performance mode: keeps the aesthetic, reduces only expensive effects */
+    .avatar-glow {
+        opacity: .18 !important;
+        animation-duration: 30s !important;
+    }
+    [data-testid="stAppViewContainer"] {
+        animation-duration: 36s !important;
+    }
+    .hero-panel,
+    .avatar-card {
+        animation-duration: .35s, 7s !important;
+    }
+    .progress-fill,
+    .avatar-fill {
+        animation-duration: 2.6s !important;
+    }
+    .mobile-app-topbar {
+        backdrop-filter: blur(6px) !important;
+        -webkit-backdrop-filter: blur(6px) !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+ui_toast_area()
+
+# Show onboarding once if profile is missing, or when manually re-running it.
+if should_show_onboarding() and page != "Data Manager":
+    render_onboarding_screen()
+    st.stop()
+
 
 df = load_log()
 
 # Unlock any achievements already earned from existing data/profile.
-check_achievements()
+# Cached/throttled so it does not make every page rerun laggy.
+if "achievements_checked_this_session" not in st.session_state:
+    check_achievements()
+    st.session_state.achievements_checked_this_session = True
 
 if page == "Home":
-    st.header("Command Centre")
+    page_hero("Command Centre", "Your daily training cockpit — strength, progress, rank and system status.", "Command OS")
     summary = workout_summary(df)
+    st.markdown("### Snapshot")
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        compact_metric("Total Sets", summary["total_sets"], "working sets")
+    with m2:
+        compact_metric("Total Reps", summary["total_reps"], "logged reps")
+    with m3:
+        compact_metric("Bench e1RM", f'{summary["best_bench_1rm"]:.1f}kg', "best strength bench")
+    with m4:
+        compact_metric("Achievements", f'{achievement_count()}/{len(ACHIEVEMENTS)}', "unique unlocks")
+
     xp_percent = min((summary["xp_into_level"] / summary["xp_needed"]) * 100, 100)
     bench_percent = min((summary["best_bench_1rm"] / 100) * 100, 100)
 
@@ -2033,7 +3960,7 @@ if page == "Home":
     if ach.empty:
         st.info("No achievements unlocked yet. Open the Achievements tab to check requirements.")
     else:
-        st.metric("Achievements", f"{len(ach)}/{len(ACHIEVEMENTS)}")
+        st.metric("Achievements", f"{achievement_count()}/{len(ACHIEVEMENTS)}")
         for _, row in ach.sort_values("date_unlocked", ascending=False).head(5).iterrows():
             st.markdown(f"""<div class="dashboard-card"><div class="nw-card-title">{row['name']}</div><div class="nw-small">{row['description']}</div></div>""", unsafe_allow_html=True)
         st.caption("Open the Achievements tab to view all locked/unlocked achievements.")
@@ -2041,7 +3968,11 @@ if page == "Home":
 
 
 elif page == "Profile":
-    st.header("Athlete Profile")
+    if st.button("Re-run Onboarding / Recalibrate Profile", type="secondary"):
+        st.session_state.force_onboarding = True
+        st.rerun()
+
+    page_hero("Athlete Profile", "Set your baseline stats so levels reflect your current physique.", "Profile")
     st.info("Set your starting level from your current real-world stats, so you don't start at Level 1.")
 
     profile = load_profile()
@@ -2080,8 +4011,14 @@ elif page == "Profile":
 
 
 
+elif page == "Onboarding":
+    page_hero("Profile Onboarding", "Re-run profile calibration without deleting any existing data.", "Calibration")
+    st.session_state.force_onboarding = True
+    render_onboarding_screen()
+
+
 elif page == "Measurements":
-    st.header("Body Measurements")
+    page_hero("Body Measurements", "Track proportions, waist, arms, chest, shoulders and more.", "Tracking")
     st.info("Log measurements to track proportions and help the app generate better physique-focused training plans.")
 
     latest = latest_measurements()
@@ -2139,7 +4076,7 @@ elif page == "Measurements":
 
 
 elif page == "Physique":
-    st.header("AI Physique Rating")
+    page_hero("AI Physique Rating", "Upload photos, rate weak points, generate a smarter program.", "AI Coach")
     st.info("Upload physique photos to get a physique score, leanness score, weak points, and a custom workout plan suggestion.")
 
     latest_m = latest_measurements()
@@ -2266,7 +4203,9 @@ elif page == "Physique":
 
 
 elif page == "Today":
-    st.header("Today’s Workout")
+    page_hero("Today’s Workout", "Choose your plan, log sets, chase PRs.", "Auto-save")
+    if st.session_state.get("last_supabase_error"):
+        st.error(st.session_state.get("last_supabase_error"))
 
     workout_source = st.radio(
         "Workout plan",
@@ -2360,8 +4299,8 @@ elif page == "Today":
 
 
 elif page == "Cardio":
-    st.header("Cardio Tracker")
-    cardio = load_csv(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"])
+    page_hero("Cardio Tracker", "Log conditioning, steps, incline work, boxing or walks.", "Engine")
+    cardio = load_cardio_log()
     c_date = st.date_input("Date", value=date.today())
     c_type = st.selectbox("Type", ["Treadmill incline walk", "Outdoor walk", "Run", "Bike", "Stairmaster", "Boxing", "Other"])
     col1, col2 = st.columns(2)
@@ -2399,8 +4338,124 @@ elif page == "Cardio":
         st.dataframe(cardio.sort_values("date", ascending=False), use_container_width=True)
 
 
+
+elif page == "Avatar":
+    page_hero("AI Avatar Progression", "Your physique as a game character — class, build, stats and next evolution.", "RPG Mode")
+
+    stats = calculate_avatar_stats()
+    stage = avatar_stage(stats["level"])
+
+    st.markdown(
+        f"""
+        <div class="avatar-card">
+            <div class="avatar-glow"></div>
+            <div class="avatar-main">
+                <div class="avatar-sigil">🧬</div>
+                <div>
+                    <div class="avatar-name">TYSON</div>
+                    <div class="avatar-class">{stats['character_class']}</div>
+                    <div class="avatar-rank">{stage} • Level {stats['level']}</div>
+                </div>
+            </div>
+            <div class="avatar-build">
+                <span>{stats['build_type']}</span>
+                <span>Focus: {stats['weak_point_focus']}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    c1, c2 = st.columns([1, 1])
+
+    with c1:
+        st.caption("Avatar scores are blended from strength, AI physique ratings, logs and measurements — they won’t show 0 just because a category has limited app history.")
+        st.subheader("Character Stats")
+        render_avatar_stat("Strength", stats["strength_score"])
+        render_avatar_stat("Size", stats["size_score"])
+        render_avatar_stat("Leanness", stats["leanness_score"])
+        render_avatar_stat("Conditioning", stats["conditioning_score"])
+        render_avatar_stat("Aesthetic", stats["aesthetic_score"])
+
+    with c2:
+        st.subheader("Current Build")
+        compact_metric("Class", stats["character_class"], "AI/RPG archetype")
+        compact_metric("Build", stats["build_type"], f"BW: {stats.get('bodyweight', 0):.1f}kg")
+        compact_metric("Weak Point", stats["weak_point_focus"], "next focus")
+        compact_metric("Stage", stage, f"Level {stats['level']}")
+
+    st.divider()
+
+    st.subheader("Avatar Summary")
+    latest_avatar = load_avatar_progression()
+    if not latest_avatar.empty and str(latest_avatar.iloc[-1].get("ai_summary", "")).strip():
+        st.write(str(latest_avatar.iloc[-1].get("ai_summary", "")))
+    else:
+        st.write(default_avatar_summary(stats))
+
+    model_name = st.text_input("AI model for avatar analysis", value="gpt-5.1", key="avatar_model")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Generate AI Avatar Analysis", type="primary", use_container_width=True):
+            with st.spinner("Evolving avatar profile..."):
+                ai_data, err = run_ai_avatar_analysis(stats, model_name)
+
+            if err:
+                st.error(err)
+            else:
+                stats["character_class"] = ai_data.get("character_class", stats["character_class"])
+                stats["build_type"] = ai_data.get("build_type", stats["build_type"])
+                stats["weak_point_focus"] = ai_data.get("weak_point_focus", stats["weak_point_focus"])
+                stats["ai_summary"] = ai_data.get("ai_summary", default_avatar_summary(stats))
+                st.session_state["last_avatar_ai"] = ai_data
+                save_avatar_snapshot({k: stats[k] for k in [
+                    "date", "level", "rank", "character_class", "build_type",
+                    "strength_score", "size_score", "leanness_score", "conditioning_score",
+                    "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"
+                ]})
+                st.session_state.just_saved_message = "AVATAR EVOLVED"
+                st.rerun()
+
+    with col_b:
+        if st.button("Save Avatar Snapshot", type="secondary", use_container_width=True):
+            stats["ai_summary"] = default_avatar_summary(stats)
+            save_avatar_snapshot({k: stats[k] for k in [
+                "date", "level", "rank", "character_class", "build_type",
+                "strength_score", "size_score", "leanness_score", "conditioning_score",
+                "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"
+            ]})
+            st.session_state.just_saved_message = "AVATAR SNAPSHOT SAVED"
+            st.rerun()
+
+    ai_last = st.session_state.get("last_avatar_ai", None)
+    if ai_last:
+        st.subheader("Next Evolution")
+        st.info(ai_last.get("next_evolution", "Keep progressing your main weak point."))
+        st.subheader("7-Day Quest")
+        st.success(ai_last.get("training_quest", "Complete your planned sessions and log every set."))
+
+    st.subheader("Avatar Timeline")
+    timeline = load_avatar_progression()
+    if timeline.empty:
+        st.info("No avatar snapshots yet. Save one to start your evolution timeline.")
+    else:
+        st.dataframe(timeline.sort_values("timestamp", ascending=False), use_container_width=True)
+
+        chart_df = timeline.copy()
+        for col in ["strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score"]:
+            chart_df[col] = pd.to_numeric(chart_df[col], errors="coerce").fillna(0)
+
+        st.line_chart(
+            chart_df,
+            x="date",
+            y=["strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score"],
+        )
+
+
+
 elif page == "Progress":
-    st.header("Progress")
+    page_hero("Progress", "Review your lifting history and trend data.", "Analytics")
     if df.empty:
         st.info("No workouts logged yet.")
     else:
@@ -2486,7 +4541,7 @@ elif page == "Goals":
 
 
 elif page == "Achievements":
-    st.header("Achievements")
+    page_hero("Achievements", "Unlocked milestones and progression badges.", "Trophies")
     st.info("Achievements auto-unlock from your existing logs, bodyweight, body fat, cardio, targets, and profile level.")
 
     unlocked = check_achievements()
@@ -2495,7 +4550,7 @@ elif page == "Achievements":
         st.rerun()
 
     ach = load_achievements()
-    unlocked_ids = set(ach["achievement_id"].astype(str).tolist()) if not ach.empty else set()
+    unlocked_ids = set(ach["achievement_id"].astype(str).dropna().tolist()) if not ach.empty else set()
 
     st.metric("Unlocked", f"{len(unlocked_ids)}/{len(ACHIEVEMENTS)}")
 
@@ -2538,7 +4593,7 @@ elif page == "Body Fat":
     mode = st.radio("Estimate method", ["Measurement estimate", "AI photo estimate", "Combined estimate"], horizontal=True)
 
     latest_bw = 0.0
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     if not bw_df.empty:
         bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
         latest_bw = float(bw_df.iloc[-1]["bodyweight"])
@@ -2745,8 +4800,8 @@ elif page == "Body Fat":
 
 
 elif page == "Bodyweight":
-    st.header("Bodyweight")
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    page_hero("Bodyweight", "Track scale weight across cut and bulk phases.", "Scale")
+    bw_df = load_bodyweight_log()
     bw_date = st.date_input("Date", value=date.today())
     bw = st.number_input("Bodyweight kg", min_value=0.0, step=0.1)
     if st.button("Save Bodyweight", type="primary"):
@@ -2760,6 +4815,298 @@ elif page == "Bodyweight":
         st.metric("Latest bodyweight", f"{bw_df.iloc[-1]['bodyweight']:.1f} kg")
         st.line_chart(bw_df, x="date", y="bodyweight")
         st.dataframe(bw_df.sort_values("date", ascending=False), use_container_width=True)
+
+
+
+elif page == "Data Manager":
+    page_hero("Data Manager", "Backups, Supabase diagnostics, CSV restore and migration.", "System")
+    st.info("Download backups of your workout data. Supabase is used first when connected, with CSV as backup.")
+
+    st.subheader("Supabase Status")
+    if supabase_enabled():
+        st.success("Supabase connected — data loads/saves to cloud database first.")
+    else:
+        st.warning("Supabase not connected — using CSV files only.")
+
+    csv_files = [
+        "workout_log.csv",
+        "bodyweight_log.csv",
+        "bodyfat_log.csv",
+        "measurements.csv",
+        "physique_ratings.csv",
+        "custom_workout_plan.csv",
+        "targets.csv",
+        "achievements.csv",
+        "cardio_log.csv",
+        "profile.csv",
+    ]
+
+    
+    st.subheader("Achievement Counter Fix")
+    st.caption("If the achievement counter looks wrong after CSV/Supabase migration, this removes duplicate achievement IDs from the local CSV view. Supabase reads will also be de-duplicated automatically.")
+
+    if st.button("Rebuild Achievement Counter", type="secondary"):
+        ach_fix = load_achievements()
+        ach_fix.to_csv(ACHIEVEMENT_FILE, index=False)
+        st.success(f"Achievement counter rebuilt: {achievement_count()}/{len(ACHIEVEMENTS)} unlocked.")
+        st.rerun()
+
+
+    st.subheader("Performance")
+    if st.button("Clear App Cache / Refresh Data", type="secondary"):
+        clear_data_cache()
+        st.session_state.pop("achievements_checked_this_session", None)
+        st.success("Cache cleared. Fresh data will load now.")
+        st.rerun()
+
+    st.subheader("Supabase Diagnostics")
+    if supabase_enabled():
+        st.success("Supabase client configured.")
+    else:
+        st.error("Supabase client not configured. Check Streamlit Secrets.")
+
+    if st.session_state.get("last_supabase_write"):
+        st.success(st.session_state.get("last_supabase_write"))
+    if st.session_state.get("last_supabase_error"):
+        st.error(st.session_state.get("last_supabase_error"))
+
+    sample_rows = {
+        "workout_log": {"date": str(date.today()), "workout": "Supabase Test", "exercise": "Connection Test", "muscle": "Test", "set": 1, "weight": 1, "reps": 1, "estimated_1rm": 1, "volume": 1, "notes": "test insert", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "bodyweight_log": {"date": str(date.today()), "bodyweight": 77.0, "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "cardio_log": {"date": str(date.today()), "type": "Test", "minutes": 1, "distance_km": 0.1, "incline": 0, "speed": 1, "calories": 1, "notes": "test insert", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "bodyfat_log": {"date": str(date.today()), "method": "Test", "bodyweight": 77.0, "height_cm": 183.5, "waist_cm": 0, "neck_cm": 0, "bf_low": 12, "bf_high": 14, "bf_mid": 13, "confidence": "test", "notes": "test insert", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "measurements": {"date": str(date.today()), "bodyweight": 77.0, "wrist_cm": 0, "forearm_cm": 0, "bicep_cm": 0, "chest_cm": 0, "waist_cm": 0, "hips_cm": 0, "thigh_cm": 0, "calf_cm": 0, "shoulders_cm": 0, "neck_cm": 0, "notes": "test insert", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "physique_ratings": {"date": str(date.today()), "physique_score": 1, "leanness_score": 1, "symmetry_score": 1, "muscularity_score": 1, "confidence": "test", "weak_points": ["test"], "improvements": ["test"], "summary": "test insert", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "custom_workout_plan": {"plan_name": "Test Plan", "workout": "Test Day", "exercise": "Test Exercise", "sets": 1, "reps": "1", "muscle": "Test", "reason": "test insert", "day_goal": "test", "timestamp": datetime.now().isoformat(timespec="seconds")},
+        "achievements": {"achievement_id": "test_" + datetime.now().strftime("%H%M%S"), "name": "Test Achievement", "description": "test insert", "date_unlocked": datetime.now().isoformat(timespec="seconds")},
+        "targets": {"target_type": "Test", "name": "Test Target " + datetime.now().strftime("%H%M%S"), "target_value": 1, "unit": "test", "created_at": datetime.now().isoformat(timespec="seconds"), "notes": "test insert"},
+        "profile": {"height_cm": 183.5, "bodyweight_kg": 77.0, "bench_e1rm": 100, "squat_e1rm": 140, "training_years": 3, "physique_score": 10, "leanness_score": 10, "base_level": 42, "created_at": datetime.now().isoformat(timespec="seconds")},
+        "avatar_progression": {"date": str(date.today()), "level": 42, "rank": "Aesthetic Tier", "character_class": "Aesthetic Hybrid", "build_type": "Athletic Frame", "strength_score": 70, "size_score": 60, "leanness_score": 65, "conditioning_score": 40, "aesthetic_score": 68, "weak_point_focus": "Side delts", "ai_summary": "Test avatar row", "timestamp": datetime.now().isoformat(timespec="seconds")},
+    }
+
+    selected_test_table = st.selectbox("Supabase table to test", list(sample_rows.keys()))
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Test Selected Table Insert", type="primary"):
+            sb_insert(selected_test_table, sample_rows[selected_test_table], show_error=True)
+
+    with col_b:
+        if st.button("Read Selected Table Rows"):
+            data, err = sb_select(selected_test_table)
+            if err:
+                st.error(err)
+            else:
+                st.write(f"Rows found in Supabase {selected_test_table}: {len(data)}")
+                if data:
+                    st.dataframe(pd.DataFrame(data).tail(10), use_container_width=True)
+
+    if st.button("Test Cardio Insert With type/cardio_type Fallback"):
+        test_cardio = {
+            "date": str(date.today()),
+            "type": "Test",
+            "minutes": 1.0,
+            "distance_km": 0.1,
+            "incline": 0.0,
+            "speed": 1.0,
+            "calories": 1.0,
+            "notes": "cardio fallback test",
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        }
+        save_cardio_row(test_cardio)
+        if st.session_state.get("last_supabase_error"):
+            st.error(st.session_state.get("last_supabase_error"))
+        else:
+            st.success("Cardio insert worked.")
+
+    if st.button("Run All Supabase Insert Tests"):
+        results = []
+        for table, row in sample_rows.items():
+            ok, err = sb_insert(table, row)
+            results.append({"table": table, "ok": ok, "error": err or ""})
+        st.dataframe(pd.DataFrame(results), use_container_width=True)
+
+    st.subheader("Detected Data Files")
+
+    file_rows = []
+    for file in csv_files:
+        path = Path(file)
+        if path.exists():
+            try:
+                size_kb = path.stat().st_size / 1024
+                modified = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                file_rows.append({
+                    "file": file,
+                    "exists": "Yes",
+                    "size_kb": round(size_kb, 2),
+                    "last_modified": modified,
+                })
+            except Exception:
+                file_rows.append({
+                    "file": file,
+                    "exists": "Yes",
+                    "size_kb": "",
+                    "last_modified": "",
+                })
+        else:
+            file_rows.append({
+                "file": file,
+                "exists": "No",
+                "size_kb": "",
+                "last_modified": "",
+            })
+
+    st.dataframe(pd.DataFrame(file_rows), use_container_width=True)
+
+    st.subheader("Download Individual CSV Files")
+
+    any_file = False
+    for file in csv_files:
+        path = Path(file)
+        if path.exists():
+            any_file = True
+            with open(path, "rb") as f:
+                st.download_button(
+                    label=f"⬇️ Download {file}",
+                    data=f,
+                    file_name=file,
+                    mime="text/csv",
+                    key=f"download_{file}",
+                )
+
+    if not any_file:
+        st.warning("No CSV data files exist yet. Log a workout/cardio/bodyweight entry first, then come back here.")
+
+    st.subheader("Full Backup ZIP")
+
+    zip_buffer = BytesIO()
+    files_added = 0
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for file in csv_files:
+            path = Path(file)
+            if path.exists():
+                zip_file.write(path, arcname=file)
+                files_added += 1
+
+        # include a small backup manifest
+        manifest = pd.DataFrame(file_rows).to_csv(index=False)
+        zip_file.writestr("backup_manifest.csv", manifest)
+        files_added += 1
+
+    zip_buffer.seek(0)
+
+    st.download_button(
+        label="🔥 Download Full Training Backup ZIP",
+        data=zip_buffer,
+        file_name=f"tyson_training_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+        mime="application/zip",
+        disabled=(files_added <= 1),
+        key="download_full_backup_zip",
+    )
+
+    st.divider()
+
+    st.subheader("Restore / Import CSV Files")
+    st.warning("Importing a CSV with the same name will replace the existing server file. Download a backup first.")
+
+    uploaded_files = st.file_uploader(
+        "Upload CSV files to restore",
+        type=["csv"],
+        accept_multiple_files=True,
+        help="Upload files like workout_log.csv, bodyfat_log.csv, achievements.csv, etc.",
+    )
+
+    allowed_files = set(csv_files)
+
+    if uploaded_files:
+        st.write("Files ready to import:")
+        for uploaded in uploaded_files:
+            if uploaded.name in allowed_files:
+                st.write(f"✅ {uploaded.name}")
+            else:
+                st.write(f"⚠️ {uploaded.name} — ignored because it is not a recognised app data file.")
+
+        confirm_restore = st.checkbox("I understand this will replace matching CSV files on the app server.")
+
+        if st.button("Restore Uploaded CSV Files", type="primary"):
+            if not confirm_restore:
+                st.error("Tick the confirmation box first.")
+            else:
+                restored = []
+                ignored = []
+                for uploaded in uploaded_files:
+                    if uploaded.name not in allowed_files:
+                        ignored.append(uploaded.name)
+                        continue
+                    data = uploaded.getvalue()
+                    Path(uploaded.name).write_bytes(data)
+                    restored.append(uploaded.name)
+
+                if restored:
+                    st.success("Restored: " + ", ".join(restored))
+                if ignored:
+                    st.warning("Ignored: " + ", ".join(ignored))
+                st.session_state.just_saved_message = "DATA RESTORE COMPLETE"
+                st.rerun()
+
+    st.divider()
+
+
+    st.divider()
+    st.subheader("CSV → Supabase Migration")
+    st.caption("Use this once if you already have CSV data and want to push it into Supabase.")
+    if st.button("Upload Existing CSV Backups to Supabase", type="secondary"):
+        if not supabase_enabled():
+            st.error("Supabase is not connected.")
+        else:
+            migration_map = {
+                "workout_log.csv": "workout_log",
+                "bodyweight_log.csv": "bodyweight_log",
+                "bodyfat_log.csv": "bodyfat_log",
+                "measurements.csv": "measurements",
+                "physique_ratings.csv": "physique_ratings",
+                "custom_workout_plan.csv": "custom_workout_plan",
+                "targets.csv": "targets",
+                "achievements.csv": "achievements",
+                "cardio_log.csv": "cardio_log",
+                "profile.csv": "profile",
+                "avatar_progression.csv": "avatar_progression",
+            }
+            migrated = []
+            for file, table in migration_map.items():
+                path = Path(file)
+                if not path.exists():
+                    continue
+                try:
+                    df_mig = pd.read_csv(path)
+                    if df_mig.empty:
+                        continue
+                    df_mig = df_mig.replace([float("inf"), float("-inf")], None)
+                    df_mig = df_mig.where(pd.notnull(df_mig), None)
+                    records = json_safe_records(df_mig.to_dict(orient="records"))
+                    get_supabase_client().table(table).insert(records).execute()
+                    migrated.append(f"{file} → {table} ({len(records)} rows)")
+                except Exception as e:
+                    st.warning(f"Could not migrate {file}: {e}")
+            if migrated:
+                st.success("Migrated: " + " | ".join(migrated))
+            else:
+                st.info("No CSV rows found to migrate.")
+
+    st.subheader("Quick Preview")
+    preview_file = st.selectbox("Preview CSV", csv_files)
+    preview_path = Path(preview_file)
+
+    if preview_path.exists():
+        try:
+            preview_df = pd.read_csv(preview_path)
+            st.caption(f"Showing last 50 rows from {preview_file}")
+            st.dataframe(preview_df.tail(50), use_container_width=True)
+        except Exception as e:
+            st.error(f"Could not preview {preview_file}: {e}")
+    else:
+        st.info(f"{preview_file} does not exist yet.")
 
 
 elif page == "Delete Data":
@@ -2834,3 +5181,569 @@ elif page == "Routine":
         else:
             for exercise, sets, reps in exercises:
                 st.write(f"**{exercise}** — {sets} sets × {reps}")
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   IOS FITNESS APP UI — FINAL OVERRIDE
+   Visible top navigation, softer cards, stronger dynamic glow.
+============================================================ */
+
+:root {
+    --ios-bg: #020617;
+    --ios-card: rgba(10, 22, 42, 0.78);
+    --ios-card2: rgba(15, 39, 68, 0.72);
+    --ios-blue: #38bdf8;
+    --ios-blue2: #0ea5e9;
+    --ios-glow: rgba(56, 189, 248, 0.50);
+    --ios-text: #eaf7ff;
+    --ios-muted: #8fb8d6;
+}
+
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(circle at 10% 0%, rgba(56,189,248,.28), transparent 28%),
+        radial-gradient(circle at 90% 10%, rgba(14,165,233,.22), transparent 30%),
+        radial-gradient(circle at 50% 96%, rgba(56,189,248,.14), transparent 36%),
+        linear-gradient(135deg, #020617, #071426 46%, #020617) !important;
+    background-size: 170% 170% !important;
+    animation: iosBgMove 15s ease infinite !important;
+}
+
+@keyframes iosBgMove {
+    0% { background-position: 0% 25%; }
+    50% { background-position: 100% 75%; }
+    100% { background-position: 0% 25%; }
+}
+
+[data-testid="stMainBlockContainer"] {
+    max-width: 1180px !important;
+    padding-top: 1.0rem !important;
+    padding-bottom: 5rem !important;
+}
+
+/* Main visible app header */
+.mobile-app-topbar {
+    position: sticky;
+    top: 0.35rem;
+    z-index: 999;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding: 14px 16px;
+    margin: 0 0 12px 0;
+    border-radius: 28px;
+    background: rgba(2, 6, 23, 0.72);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid rgba(56,189,248,.16);
+    box-shadow:
+        0 18px 44px rgba(0,0,0,.28),
+        0 0 28px rgba(56,189,248,.12);
+}
+
+.app-title-wrap {
+    display:flex;
+    align-items:center;
+    gap:12px;
+}
+
+.app-icon {
+    width:42px;
+    height:42px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:16px;
+    background: linear-gradient(135deg, #075985, #38bdf8);
+    box-shadow: 0 0 24px rgba(56,189,248,.38);
+    font-size:22px;
+}
+
+.app-title {
+    font-size:1.15rem;
+    font-weight:950;
+    color:#eaf7ff;
+    letter-spacing:-.03em;
+}
+
+.app-subtitle {
+    color:#7dd3fc;
+    font-size:.78rem;
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:.12em;
+}
+
+.app-status-pill {
+    padding:8px 12px;
+    border-radius:999px;
+    color:#02131f;
+    font-weight:950;
+    background:linear-gradient(90deg, #7dd3fc, #38bdf8);
+    box-shadow:0 0 22px rgba(56,189,248,.24);
+}
+
+/* Turn Streamlit buttons into iOS nav pills */
+div[data-testid="column"] .stButton button {
+    min-height: 46px !important;
+}
+
+.stButton button {
+    border-radius: 999px !important;
+    border: 1px solid rgba(56,189,248,.13) !important;
+    background:
+        linear-gradient(145deg, rgba(15,39,68,.80), rgba(2,6,23,.82)) !important;
+    color: #dff7ff !important;
+    font-weight: 900 !important;
+    box-shadow:
+        0 8px 24px rgba(0,0,0,.22),
+        inset 0 0 12px rgba(56,189,248,.04) !important;
+    transition: all .20s ease !important;
+}
+
+.stButton button[kind="primary"],
+.stButton button:focus {
+    color: #02131f !important;
+    background: linear-gradient(90deg, #7dd3fc, #38bdf8, #0ea5e9) !important;
+    box-shadow:
+        0 10px 28px rgba(56,189,248,.34),
+        0 0 26px rgba(56,189,248,.28) !important;
+}
+
+.stButton button:hover {
+    transform: translateY(-2px) scale(1.01) !important;
+    border-color: rgba(56,189,248,.34) !important;
+    box-shadow: 0 16px 34px rgba(0,0,0,.28), 0 0 30px rgba(56,189,248,.24) !important;
+}
+
+/* Hero cards */
+.hero-panel {
+    border-radius: 32px !important;
+    padding: 22px 24px !important;
+    margin-top: 12px !important;
+    background:
+        linear-gradient(135deg, rgba(15,39,68,.76), rgba(2,6,23,.78)),
+        radial-gradient(circle at 12% 25%, rgba(56,189,248,.22), transparent 30%) !important;
+    border: 1px solid rgba(56,189,248,.16) !important;
+    box-shadow:
+        0 20px 54px rgba(0,0,0,.30),
+        0 0 34px rgba(56,189,248,.15),
+        inset 0 0 28px rgba(56,189,248,.04) !important;
+    animation: iosHeroIn .55s ease both, iosHeroBreath 5s ease-in-out infinite !important;
+}
+
+@keyframes iosHeroIn {
+    from { opacity:0; transform:translateY(-10px) scale(.985); filter: blur(6px); }
+    to { opacity:1; transform:translateY(0) scale(1); filter: blur(0); }
+}
+
+@keyframes iosHeroBreath {
+    0%,100% { box-shadow:0 20px 54px rgba(0,0,0,.30), 0 0 24px rgba(56,189,248,.12); }
+    50% { box-shadow:0 20px 54px rgba(0,0,0,.30), 0 0 44px rgba(56,189,248,.24); }
+}
+
+.hero-title {
+    font-size: clamp(1.55rem, 4vw, 2.15rem) !important;
+    line-height: 1.05 !important;
+}
+
+.hero-badge {
+    background: linear-gradient(90deg, #7dd3fc, #38bdf8) !important;
+    color: #02131f !important;
+}
+
+/* Cards */
+.compact-metric,
+.section-card,
+.mission-card,
+.nw-exercise-card,
+div[data-testid="stMetric"],
+div[data-testid="stExpander"],
+details {
+    border-radius: 28px !important;
+    background:
+        linear-gradient(145deg, rgba(15,39,68,.68), rgba(2,6,23,.72)) !important;
+    border: 1px solid rgba(56,189,248,.11) !important;
+    box-shadow:
+        0 12px 34px rgba(0,0,0,.25),
+        0 0 18px rgba(56,189,248,.07),
+        inset 0 0 18px rgba(56,189,248,.03) !important;
+    transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease !important;
+}
+
+.compact-metric:hover,
+.section-card:hover,
+.mission-card:hover,
+.nw-exercise-card:hover,
+div[data-testid="stMetric"]:hover {
+    transform: translateY(-3px) !important;
+    border-color: rgba(56,189,248,.24) !important;
+    box-shadow:
+        0 18px 42px rgba(0,0,0,.30),
+        0 0 34px rgba(56,189,248,.18) !important;
+}
+
+/* Restore dynamic glowing progress bars everywhere */
+.progress-track {
+    position: relative !important;
+    height: 14px !important;
+    border-radius: 999px !important;
+    overflow: hidden !important;
+    background: rgba(2,6,23,.88) !important;
+    border: 1px solid rgba(56,189,248,.14) !important;
+    box-shadow: inset 0 0 14px rgba(0,0,0,.55) !important;
+}
+
+.progress-fill {
+    width: var(--progress) !important;
+    height: 100% !important;
+    border-radius: 999px !important;
+    background:
+        linear-gradient(90deg, #075985, #0ea5e9, #38bdf8, #7dd3fc, #38bdf8) !important;
+    background-size: 240% 100% !important;
+    animation: iosProgressShimmer 1.45s linear infinite, iosProgressPulse 2.2s ease-in-out infinite !important;
+    box-shadow:
+        0 0 18px rgba(56,189,248,.62),
+        0 0 34px rgba(56,189,248,.35) !important;
+}
+
+.progress-fill::after {
+    content:"";
+    position:absolute;
+    top:0;
+    left:-40%;
+    width:35%;
+    height:100%;
+    background:linear-gradient(90deg, transparent, rgba(255,255,255,.65), transparent);
+    animation: iosProgressSweep 1.8s ease-in-out infinite;
+}
+
+@keyframes iosProgressShimmer {
+    from { background-position: 0% 0%; }
+    to { background-position: 240% 0%; }
+}
+
+@keyframes iosProgressPulse {
+    0%,100% { filter: brightness(1); }
+    50% { filter: brightness(1.22); }
+}
+
+@keyframes iosProgressSweep {
+    0% { left:-45%; }
+    55% { left:110%; }
+    100% { left:110%; }
+}
+
+.stProgress div div div,
+[data-testid="stProgress"] div div div {
+    background:
+        linear-gradient(90deg, #075985, #0ea5e9, #38bdf8, #7dd3fc) !important;
+    box-shadow: 0 0 22px rgba(56,189,248,.48) !important;
+    animation: iosProgressShimmer 1.45s linear infinite !important;
+}
+
+/* Inputs feel more native */
+[data-baseweb="select"] > div,
+input,
+textarea {
+    border-radius: 18px !important;
+    background: rgba(2,6,23,.72) !important;
+    border-color: rgba(56,189,248,.14) !important;
+    color: #eaf7ff !important;
+}
+
+/* Hide the sidebar visually being essential by making it compact and labelled backup */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, rgba(2,6,23,.98), rgba(7,20,38,.96)) !important;
+}
+
+.side-sub::after {
+    content: " • backup";
+    color: #64748b;
+}
+
+/* Better phone layout */
+@media (max-width: 760px) {
+    [data-testid="stMainBlockContainer"] {
+        padding-left: .8rem !important;
+        padding-right: .8rem !important;
+        padding-top: .5rem !important;
+    }
+
+    .mobile-app-topbar {
+        top: .25rem;
+        padding: 12px;
+        border-radius: 24px;
+    }
+
+    .app-title { font-size: 1rem; }
+    .app-subtitle { font-size: .68rem; }
+    .app-status-pill { display:none; }
+
+    .hero-panel {
+        padding: 18px !important;
+        border-radius: 26px !important;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   AVATAR RPG PROGRESSION UI
+============================================================ */
+
+.avatar-card {
+    position: relative;
+    overflow: hidden;
+    padding: 28px;
+    border-radius: 34px;
+    margin: 18px 0 22px 0;
+    background:
+        radial-gradient(circle at 18% 18%, rgba(125,211,252,.25), transparent 32%),
+        linear-gradient(145deg, rgba(15,39,68,.82), rgba(2,6,23,.88));
+    border: 1px solid rgba(56,189,248,.20);
+    box-shadow:
+        0 22px 58px rgba(0,0,0,.32),
+        0 0 42px rgba(56,189,248,.20),
+        inset 0 0 30px rgba(56,189,248,.06);
+    animation: avatarEnter .65s ease both, avatarBreath 4.5s ease-in-out infinite;
+}
+
+@keyframes avatarEnter {
+    from { opacity:0; transform:translateY(14px) scale(.98); filter:blur(8px); }
+    to { opacity:1; transform:translateY(0) scale(1); filter:blur(0); }
+}
+
+@keyframes avatarBreath {
+    0%,100% { box-shadow:0 22px 58px rgba(0,0,0,.32), 0 0 28px rgba(56,189,248,.15); }
+    50% { box-shadow:0 22px 58px rgba(0,0,0,.32), 0 0 56px rgba(56,189,248,.32); }
+}
+
+.avatar-glow {
+    position:absolute;
+    inset:-30%;
+    background: conic-gradient(from 180deg, transparent, rgba(56,189,248,.20), transparent, rgba(14,165,233,.18), transparent);
+    animation: avatarSpin 8s linear infinite;
+    opacity:.55;
+}
+
+@keyframes avatarSpin {
+    from { transform:rotate(0deg); }
+    to { transform:rotate(360deg); }
+}
+
+.avatar-main, .avatar-build {
+    position: relative;
+    z-index: 2;
+}
+
+.avatar-main {
+    display:flex;
+    align-items:center;
+    gap:18px;
+}
+
+.avatar-sigil {
+    width:74px;
+    height:74px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:26px;
+    background:linear-gradient(135deg, #075985, #38bdf8, #7dd3fc);
+    box-shadow:0 0 34px rgba(56,189,248,.45);
+    font-size:38px;
+}
+
+.avatar-name {
+    font-size:2.3rem;
+    font-weight:1000;
+    letter-spacing:-.06em;
+    color:#eaf7ff;
+    text-shadow:0 0 24px rgba(56,189,248,.36);
+}
+
+.avatar-class {
+    font-size:1.05rem;
+    color:#7dd3fc;
+    font-weight:900;
+    letter-spacing:.05em;
+    text-transform:uppercase;
+}
+
+.avatar-rank {
+    margin-top:5px;
+    color:#8fb8d6;
+    font-weight:800;
+}
+
+.avatar-build {
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    margin-top:18px;
+}
+
+.avatar-build span {
+    padding:9px 12px;
+    border-radius:999px;
+    background:rgba(2,6,23,.58);
+    border:1px solid rgba(56,189,248,.18);
+    color:#eaf7ff;
+    font-weight:850;
+}
+
+.avatar-stat {
+    padding:14px 16px;
+    border-radius:22px;
+    margin-bottom:12px;
+    background:linear-gradient(145deg, rgba(15,39,68,.68), rgba(2,6,23,.72));
+    border:1px solid rgba(56,189,248,.12);
+    box-shadow:0 10px 30px rgba(0,0,0,.20), inset 0 0 14px rgba(56,189,248,.035);
+}
+
+.avatar-stat-top {
+    display:flex;
+    justify-content:space-between;
+    color:#eaf7ff;
+    font-weight:900;
+    margin-bottom:8px;
+}
+
+.avatar-track {
+    position:relative;
+    overflow:hidden;
+    height:12px;
+    border-radius:999px;
+    background:rgba(2,6,23,.86);
+    border:1px solid rgba(56,189,248,.12);
+}
+
+.avatar-fill {
+    width:var(--avatar-progress);
+    height:100%;
+    border-radius:999px;
+    background:linear-gradient(90deg, #075985, #38bdf8, #7dd3fc, #38bdf8);
+    background-size:220% 100%;
+    box-shadow:0 0 22px rgba(56,189,248,.55);
+    animation: avatarBar 1.5s linear infinite;
+}
+
+@keyframes avatarBar {
+    from { background-position:0% 0%; }
+    to { background-position:220% 0%; }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   PERFORMANCE MODE OVERRIDE
+   Keeps glow, reduces expensive animations and blur.
+============================================================ */
+
+[data-testid="stAppViewContainer"] {
+    animation-duration: 28s !important;
+}
+
+.hero-panel,
+.avatar-card,
+.mission-card,
+.nw-exercise-card,
+.compact-metric,
+.section-card,
+div[data-testid="stMetric"] {
+    animation-duration: .35s !important;
+}
+
+.avatar-glow {
+    opacity: .28 !important;
+    animation-duration: 18s !important;
+}
+
+.mobile-app-topbar {
+    backdrop-filter: blur(8px) !important;
+    -webkit-backdrop-filter: blur(8px) !important;
+}
+
+.progress-fill,
+.avatar-fill {
+    animation-duration: 2.8s !important;
+}
+
+.floating-toast {
+    pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: .001s !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001s !important;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   ONBOARDING PROFILE CALIBRATION UI
+============================================================ */
+
+.onboarding-shell {
+    position: relative;
+    overflow: hidden;
+    padding: 30px;
+    border-radius: 34px;
+    margin: 18px 0 24px 0;
+    background:
+        radial-gradient(circle at 16% 20%, rgba(125,211,252,.26), transparent 34%),
+        linear-gradient(145deg, rgba(15,39,68,.82), rgba(2,6,23,.88));
+    border: 1px solid rgba(56,189,248,.22);
+    box-shadow:
+        0 22px 58px rgba(0,0,0,.32),
+        0 0 44px rgba(56,189,248,.20),
+        inset 0 0 30px rgba(56,189,248,.06);
+}
+
+.onboarding-badge {
+    display:inline-flex;
+    padding:8px 12px;
+    border-radius:999px;
+    color:#02131f;
+    font-weight:950;
+    background:linear-gradient(90deg, #7dd3fc, #38bdf8);
+    box-shadow:0 0 24px rgba(56,189,248,.26);
+    margin-bottom:16px;
+}
+
+.onboarding-title {
+    color:#eaf7ff;
+    font-size:2.4rem;
+    line-height:1.0;
+    font-weight:1000;
+    letter-spacing:-.06em;
+    text-shadow:0 0 26px rgba(56,189,248,.34);
+}
+
+.onboarding-subtitle {
+    color:#8fb8d6;
+    margin-top:10px;
+    max-width:760px;
+    font-size:1.02rem;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
