@@ -451,82 +451,8 @@ def rank_name(level):
         return "⚔️ Trainee"
     return "🌱 Rookie"
 
-def latest_bodyweight_value():
-    bw_df = load_csv(
-        BODYWEIGHT_FILE,
-        ["date", "bodyweight", "timestamp"]
-    )
-
-    if bw_df.empty:
-        return None
-
-    bw_df["bodyweight"] = pd.to_numeric(
-        bw_df["bodyweight"], errors="coerce"
-    ).fillna(0)
-
-    valid = bw_df[bw_df["bodyweight"] > 0]
-
-    if valid.empty:
-        return None
-
-    return float(valid.iloc[-1]["bodyweight"])
 
 
-def latest_bodyfat_mid():
-    bf_df = load_bodyfat_log()
-
-    if bf_df.empty:
-        return None
-
-    bf_df["bf_mid"] = pd.to_numeric(
-        bf_df["bf_mid"], errors="coerce"
-    ).fillna(0)
-
-    valid = bf_df[bf_df["bf_mid"] > 0]
-
-    if valid.empty:
-        return None
-
-    return float(valid.iloc[-1]["bf_mid"])
-
-
-def render_target_bar(
-    title,
-    current,
-    target,
-    unit,
-    lower_is_better=False
-):
-    if current is None or target is None:
-        st.info(f"{title}: Set a target to begin.")
-        return
-
-    if lower_is_better:
-        progress = 100 if current <= target else (target / current) * 100
-    else:
-        progress = (current / target) * 100
-
-    progress = max(0, min(progress, 100))
-
-    st.markdown(
-        f"""
-        <div class="mission-card">
-            <div class="mission-title">{title}</div>
-
-            <div class="progress-track">
-                <div class="progress-fill"
-                style="--progress:{progress}%;">
-                </div>
-            </div>
-
-            <div class="progress-label">
-            {current:.1f}{unit} / {target:.1f}{unit}
-            ({progress:.0f}%)
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 def current_exercise_best_1rm(exercise_name):
     df = load_log()
@@ -535,31 +461,70 @@ def current_exercise_best_1rm(exercise_name):
         return 0
 
     df = normalise_workout_log(df)
-
     ex = df[df["exercise"] == exercise_name].copy()
 
     if ex.empty:
         return 0
 
-    ex["weight"] = pd.to_numeric(
-        ex["weight"],
-        errors="coerce"
-    ).fillna(0)
-
-    ex["reps"] = pd.to_numeric(
-        ex["reps"],
-        errors="coerce"
-    ).fillna(0)
+    ex["weight"] = pd.to_numeric(ex["weight"], errors="coerce").fillna(0)
+    ex["reps"] = pd.to_numeric(ex["reps"], errors="coerce").fillna(0)
 
     ex["estimated_1rm"] = ex.apply(
-        lambda x: estimated_1rm(
-            float(x["weight"]),
-            int(x["reps"])
-        ),
-        axis=1
+        lambda x: estimated_1rm(float(x["weight"]), int(x["reps"])),
+        axis=1,
     )
 
     return float(ex["estimated_1rm"].max())
+
+
+
+def latest_bodyweight_value():
+    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    if bw_df.empty:
+        return None
+    bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
+    valid = bw_df[bw_df["bodyweight"] > 0]
+    if valid.empty:
+        return None
+    return float(valid.iloc[-1]["bodyweight"])
+
+
+def latest_bodyfat_mid():
+    bf_df = load_bodyfat_log()
+    if bf_df.empty:
+        return None
+    bf_df["bf_mid"] = pd.to_numeric(bf_df["bf_mid"], errors="coerce").fillna(0)
+    valid = bf_df[bf_df["bf_mid"] > 0]
+    if valid.empty:
+        return None
+    return float(valid.iloc[-1]["bf_mid"])
+
+
+def render_target_bar(title, current, target, unit, lower_is_better=False):
+    if current is None or target is None:
+        st.info(f"{title}: Set a target to begin.")
+        return
+
+    if lower_is_better:
+        progress = 100 if current <= target else (target / current) * 100
+    else:
+        progress = (current / target) * 100 if target else 0
+
+    progress = max(0, min(progress, 100))
+
+    st.markdown(
+        f"""
+        <div class="mission-card">
+            <div class="mission-title">{title}</div>
+            <div class="progress-track">
+                <div class="progress-fill" style="--progress:{progress}%;"></div>
+            </div>
+            <div class="progress-label">{current:.1f}{unit} / {target:.1f}{unit} ({progress:.0f}%)</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def workout_summary(df):
     df = normalise_workout_log(df.copy())
@@ -651,6 +616,104 @@ def get_bodyweight_stats():
         "max": float(valid["bodyweight"].max()),
         "count": len(valid),
     }
+
+
+
+
+def encode_image_for_openai(uploaded_file):
+    data = uploaded_file.getvalue()
+    mime = uploaded_file.type or "image/jpeg"
+    encoded = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime};base64,{encoded}"
+
+
+def run_ai_bodyfat_estimate(front_photo, back_photo, height_cm, weight_kg, waist_cm, neck_cm, lighting, pump_status, time_of_day, model_name):
+    """
+    AI photo-based body fat estimate.
+    Requires OPENAI_API_KEY in Streamlit secrets or environment variables.
+    Waist/neck are optional and ignored unless > 0.
+    """
+    try:
+        from openai import OpenAI
+    except Exception as e:
+        return None, f"OpenAI package not installed. Add 'openai' to requirements.txt. Error: {e}"
+
+    api_key = None
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+    except Exception:
+        api_key = None
+
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        return None, "Missing OPENAI_API_KEY. Add it to Streamlit Cloud secrets or your environment variables."
+
+    if front_photo is None and back_photo is None:
+        return None, "Upload at least one physique photo."
+
+    client = OpenAI(api_key=api_key)
+
+    user_text = f"""
+You are estimating male body fat percentage from physique photos for a fitness tracking app.
+
+This is not medical advice. Give a realistic range, not false precision.
+
+User stats:
+- Height: {height_cm} cm
+- Bodyweight: {weight_kg} kg
+- Waist: {waist_cm if waist_cm and waist_cm > 0 else "Not provided"}
+- Neck: {neck_cm if neck_cm and neck_cm > 0 else "Not provided"}
+- Lighting: {lighting}
+- Pump status: {pump_status}
+- Time of day: {time_of_day}
+
+Important:
+- Do NOT use waist or neck unless actually provided.
+- If waist/neck say "Not provided", base the estimate on photos, height, weight, lighting, pump, and time only.
+- Be conservative if lighting/pump is flattering.
+- Return ONLY valid JSON.
+
+JSON schema:
+{{
+  "bf_low": number,
+  "bf_high": number,
+  "bf_mid": number,
+  "confidence": "low" | "medium" | "high",
+  "notes": "short practical explanation",
+  "fat_storage": "short note",
+  "ten_percent_notes": "short note"
+}}
+"""
+
+    content = [{"type": "input_text", "text": user_text}]
+
+    if front_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_image_for_openai(front_photo)})
+    if back_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_image_for_openai(back_photo)})
+
+    try:
+        response = client.responses.create(
+            model=model_name,
+            input=[{"role": "user", "content": content}],
+        )
+
+        text = getattr(response, "output_text", None)
+        if not text:
+            text = str(response)
+
+        text_clean = text.strip().replace("```json", "").replace("```", "").strip()
+        data = json.loads(text_clean)
+
+        for key in ["bf_low", "bf_high", "bf_mid", "confidence", "notes"]:
+            if key not in data:
+                return None, f"AI response missing key: {key}. Raw response: {text[:500]}"
+
+        return data, None
+
+    except Exception as e:
+        return None, f"AI estimate failed: {e}"
 
 
 
@@ -897,9 +960,9 @@ div[data-testid="stMetric"] { background: rgba(15,23,42,.65); border: 1px solid 
 
 st.markdown("""
 <div class="nw-hero">
-    <div class="nw-hero-title">⚡ Training Tracker</div>
-    <div class="nw-hero-sub">PPPPLA Split</div>
-    <span class="nw-badge">Push • Pull • Legs • Aesthetics • Recovery</span>
+    <div class="nw-hero-title">⚡ Tyson Training</div>
+    <div class="nw-hero-sub">Nightwing-inspired PPPPLA tracker</div>
+    <span class="nw-badge">Bench Strength • V-Taper • Delts • Cardio • XP System</span>
     <div class="nw-scanline"></div>
 </div>
 """, unsafe_allow_html=True)
