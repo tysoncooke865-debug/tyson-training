@@ -451,7 +451,82 @@ def rank_name(level):
         return "⚔️ Trainee"
     return "🌱 Rookie"
 
+def latest_bodyweight_value():
+    bw_df = load_csv(
+        BODYWEIGHT_FILE,
+        ["date", "bodyweight", "timestamp"]
+    )
 
+    if bw_df.empty:
+        return None
+
+    bw_df["bodyweight"] = pd.to_numeric(
+        bw_df["bodyweight"], errors="coerce"
+    ).fillna(0)
+
+    valid = bw_df[bw_df["bodyweight"] > 0]
+
+    if valid.empty:
+        return None
+
+    return float(valid.iloc[-1]["bodyweight"])
+
+
+def latest_bodyfat_mid():
+    bf_df = load_bodyfat_log()
+
+    if bf_df.empty:
+        return None
+
+    bf_df["bf_mid"] = pd.to_numeric(
+        bf_df["bf_mid"], errors="coerce"
+    ).fillna(0)
+
+    valid = bf_df[bf_df["bf_mid"] > 0]
+
+    if valid.empty:
+        return None
+
+    return float(valid.iloc[-1]["bf_mid"])
+
+
+def render_target_bar(
+    title,
+    current,
+    target,
+    unit,
+    lower_is_better=False
+):
+    if current is None or target is None:
+        st.info(f"{title}: Set a target to begin.")
+        return
+
+    if lower_is_better:
+        progress = 100 if current <= target else (target / current) * 100
+    else:
+        progress = (current / target) * 100
+
+    progress = max(0, min(progress, 100))
+
+    st.markdown(
+        f"""
+        <div class="mission-card">
+            <div class="mission-title">{title}</div>
+
+            <div class="progress-track">
+                <div class="progress-fill"
+                style="--progress:{progress}%;">
+                </div>
+            </div>
+
+            <div class="progress-label">
+            {current:.1f}{unit} / {target:.1f}{unit}
+            ({progress:.0f}%)
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def workout_summary(df):
     df = normalise_workout_log(df.copy())
