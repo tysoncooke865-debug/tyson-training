@@ -620,6 +620,40 @@ def get_bodyweight_stats():
 
 
 
+
+def bodyfat_outputs(weight_kg, bf_percent, target_bf=10.0):
+    """
+    Returns fat mass, lean mass, target weight, and fat to lose.
+    Safe against missing/invalid values.
+    """
+    try:
+        weight_kg = float(weight_kg)
+        bf_percent = float(bf_percent)
+        target_bf = float(target_bf)
+
+        if weight_kg <= 0 or bf_percent <= 0 or target_bf <= 0 or target_bf >= 100:
+            return None, None, None, None
+
+        fat_mass = weight_kg * (bf_percent / 100)
+        lean_mass = weight_kg - fat_mass
+        target_weight = lean_mass / (1 - target_bf / 100)
+        fat_to_lose = max(weight_kg - target_weight, 0)
+
+        return fat_mass, lean_mass, target_weight, fat_to_lose
+
+    except Exception:
+        return None, None, None, None
+
+
+def safe_kg(value):
+    if value is None:
+        return "No data"
+    try:
+        return f"{float(value):.1f}kg"
+    except Exception:
+        return "No data"
+
+
 def encode_image_for_openai(uploaded_file):
     data = uploaded_file.getvalue()
     mime = uploaded_file.type or "image/jpeg"
@@ -1382,7 +1416,7 @@ elif page == "Body Fat":
                     <div class="progress-track">
                         <div class="progress-fill" style="--progress: {min(navy_bf * 4, 100):.1f}%;"></div>
                     </div>
-                    <div class="progress-label">Measurement range: {bf_low:.1f}% - {bf_high:.1f}% • Fat to lose to {target_bf:.1f}%: {fat_to_lose:.1f}kg</div>
+                    <div class="progress-label">Measurement range: {bf_low:.1f}% - {bf_high:.1f}% • Fat to lose to {target_bf:.1f}%: {safe_kg(fat_to_lose)}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1463,7 +1497,7 @@ elif page == "Body Fat":
                     <div class="progress-track">
                         <div class="progress-fill" style="--progress: {min(bf_mid * 4, 100):.1f}%;"></div>
                     </div>
-                    <div class="progress-label">{bf_low:.1f}% - {bf_high:.1f}% • Target {target_bf:.1f}% weight: {target_weight:.1f}kg • Fat to lose: {fat_to_lose:.1f}kg</div>
+                    <div class="progress-label">{bf_low:.1f}% - {bf_high:.1f}% • Target {target_bf:.1f}% weight: {safe_kg(target_weight)} • Fat to lose: {safe_kg(fat_to_lose)}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
