@@ -2038,9 +2038,9 @@ div[data-testid="stMetric"] { background: rgba(15,23,42,.65); border: 1px solid 
 
 st.markdown("""
 <div class="nw-hero">
-    <div class="nw-hero-title">⚡ Tyson Training</div>
-    <div class="nw-hero-sub">Redline-inspired PPPPLA tracker</div>
-    <span class="nw-badge">Bench Strength • V-Taper • Delts • Cardio • XP System</span>
+    <div class="nw-hero-title">⚡Training System</div>
+    <div class="nw-hero-sub">PPPPLA tracker</div>
+    <span class="nw-badge">Push • Pull • Legs • Aesthetics • Recovery</span>
     <div class="nw-scanline"></div>
 </div>
 """, unsafe_allow_html=True)
@@ -2940,3 +2940,72 @@ elif page == "Routine":
         else:
             for exercise, sets, reps in exercises:
                 st.write(f"**{exercise}** — {sets} sets × {reps}")
+
+
+st.markdown("""
+<style>
+
+/* FORCE FINAL RED OVERRIDE */
+
+:root {
+    --primary-color: #ff2b2b !important;
+}
+
+* {
+    accent-color: #ff2b2b !important;
+}
+
+/* sliders */
+.stSlider [data-baseweb="slider"] div {
+    background-color: #ff3333 !important;
+}
+
+/* radio/select highlights */
+div[role="radiogroup"] label,
+[data-baseweb="select"] {
+    border-color:#ff3333 !important;
+}
+
+/* tabs and active indicators */
+button[aria-selected="true"],
+[data-testid="stSidebar"] [aria-selected="true"] {
+    color:#ff3333 !important;
+    border-color:#ff3333 !important;
+}
+
+/* links */
+a {
+    color:#ff4d4d !important;
+}
+
+/* inputs */
+input:focus,
+textarea:focus {
+    border-color:#ff3333 !important;
+    box-shadow:0 0 10px #ff3333 !important;
+}
+
+/* file uploader */
+[data-testid="stFileUploader"] {
+    border-color:#ff3333 !important;
+}
+
+/* expanders */
+.streamlit-expanderHeader {
+    color:#ff3333 !important;
+}
+
+/* progress */
+.stProgress div div div {
+    background:#ff3333 !important;
+}
+
+/* glowing scrollbar */
+::-webkit-scrollbar-thumb {
+    background:#ff3333;
+    box-shadow:0 0 10px red;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
