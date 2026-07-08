@@ -1467,6 +1467,395 @@ def check_achievements():
     return unlocked
 
 
+
+# ============================================================
+# FINAL MERGE-SAFE DEFINITIONS / DEBUG PATCH
+# ============================================================
+
+def load_bodyfat_log():
+    return load_csv(
+        BODYFAT_FILE,
+        ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm",
+         "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"],
+    )
+
+
+def save_bodyfat_estimate(row):
+    df = load_bodyfat_log()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(BODYFAT_FILE, index=False)
+
+
+def bodyfat_outputs(weight_kg, bf_percent, target_bf=10.0):
+    try:
+        weight_kg = float(weight_kg)
+        bf_percent = float(bf_percent)
+        target_bf = float(target_bf)
+        if weight_kg <= 0 or bf_percent <= 0 or target_bf <= 0 or target_bf >= 100:
+            return None, None, None, None
+        fat_mass = weight_kg * (bf_percent / 100)
+        lean_mass = weight_kg - fat_mass
+        target_weight = lean_mass / (1 - target_bf / 100)
+        fat_to_lose = max(weight_kg - target_weight, 0)
+        return fat_mass, lean_mass, target_weight, fat_to_lose
+    except Exception:
+        return None, None, None, None
+
+
+def safe_kg(value):
+    if value is None:
+        return "No data"
+    try:
+        return f"{float(value):.1f}kg"
+    except Exception:
+        return "No data"
+
+
+def load_targets():
+    return load_csv(TARGETS_FILE, ["target_type", "name", "target_value", "unit", "created_at", "notes"])
+
+
+def save_or_update_target(target_type, name, target_value, unit, notes=""):
+    df = load_targets()
+    if not df.empty:
+        df["target_type"] = df["target_type"].astype(str)
+        df["name"] = df["name"].astype(str)
+        df = df.loc[~((df["target_type"] == str(target_type)) & (df["name"] == str(name)))].copy()
+    new_row = {
+        "target_type": target_type,
+        "name": name,
+        "target_value": float(target_value),
+        "unit": unit,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "notes": notes,
+    }
+    pd.concat([df, pd.DataFrame([new_row])], ignore_index=True).to_csv(TARGETS_FILE, index=False)
+
+
+def get_target(target_type, name):
+    df = load_targets()
+    if df.empty:
+        return None
+    matches = df[(df["target_type"].astype(str) == str(target_type)) & (df["name"].astype(str) == str(name))]
+    if matches.empty:
+        return None
+    try:
+        return float(matches.iloc[-1]["target_value"])
+    except Exception:
+        return None
+
+
+def latest_bodyweight_value():
+    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    if bw_df.empty:
+        return None
+    bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
+    valid = bw_df[bw_df["bodyweight"] > 0]
+    if valid.empty:
+        return None
+    return float(valid.iloc[-1]["bodyweight"])
+
+
+def latest_bodyfat_mid():
+    bf_df = load_bodyfat_log()
+    if bf_df.empty:
+        return None
+    bf_df["bf_mid"] = pd.to_numeric(bf_df["bf_mid"], errors="coerce").fillna(0)
+    valid = bf_df[bf_df["bf_mid"] > 0]
+    if valid.empty:
+        return None
+    return float(valid.iloc[-1]["bf_mid"])
+
+
+def current_exercise_best_1rm(exercise_name):
+    df = load_log()
+    if df.empty:
+        return 0
+    df = normalise_workout_log(df)
+    ex = df[df["exercise"].astype(str) == str(exercise_name)].copy()
+    if ex.empty:
+        return 0
+    ex["weight"] = pd.to_numeric(ex["weight"], errors="coerce").fillna(0)
+    ex["reps"] = pd.to_numeric(ex["reps"], errors="coerce").fillna(0)
+    ex["estimated_1rm"] = ex.apply(lambda x: estimated_1rm(float(x["weight"]), int(x["reps"])), axis=1)
+    return float(ex["estimated_1rm"].max())
+
+
+def render_target_bar(title, current, target, unit, lower_is_better=False):
+    if current is None or target is None:
+        st.info(f"{title}: Set a target to begin.")
+        return
+    try:
+        current = float(current)
+        target = float(target)
+    except Exception:
+        st.info(f"{title}: Waiting for valid target/data.")
+        return
+    if target <= 0:
+        st.info(f"{title}: Target must be above 0.")
+        return
+    progress = 100 if (lower_is_better and current <= target) else ((target / current) * 100 if lower_is_better else (current / target) * 100)
+    progress = max(0, min(progress, 100))
+    st.markdown(
+        f"""
+        <div class="mission-card">
+            <div class="mission-title">{title}</div>
+            <div class="progress-track"><div class="progress-fill" style="--progress:{progress:.1f}%;"></div></div>
+            <div class="progress-label">{current:.1f}{unit} / {target:.1f}{unit} ({progress:.0f}%)</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def encode_image_for_openai(uploaded_file):
+    data = uploaded_file.getvalue()
+    mime = uploaded_file.type or "image/jpeg"
+    encoded = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime};base64,{encoded}"
+
+
+def encode_uploaded_image(uploaded_file):
+    return encode_image_for_openai(uploaded_file)
+
+
+def _get_openai_client():
+    try:
+        from openai import OpenAI
+    except Exception as e:
+        return None, f"OpenAI package not installed. Add 'openai' to requirements.txt. Error: {e}"
+    api_key = None
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+    except Exception:
+        api_key = None
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None, "Missing OPENAI_API_KEY. Add it to Streamlit Cloud secrets."
+    return OpenAI(api_key=api_key), None
+
+
+def run_ai_bodyfat_estimate(front_photo, back_photo, height_cm, weight_kg, waist_cm, neck_cm, lighting, pump_status, time_of_day, model_name):
+    client, err = _get_openai_client()
+    if err:
+        return None, err
+    if front_photo is None and back_photo is None:
+        return None, "Upload at least one physique photo."
+    user_text = f"""
+Estimate male body fat from physique photos for a fitness app. Return ONLY valid JSON.
+
+Stats:
+Height: {height_cm} cm
+Bodyweight: {weight_kg} kg
+Waist: {waist_cm if waist_cm and waist_cm > 0 else "Not provided"}
+Neck: {neck_cm if neck_cm and neck_cm > 0 else "Not provided"}
+Lighting: {lighting}
+Pump: {pump_status}
+Time: {time_of_day}
+
+Do not use waist/neck unless provided. Be conservative with flattering lighting or pump.
+
+Schema:
+{{
+  "bf_low": number,
+  "bf_high": number,
+  "bf_mid": number,
+  "confidence": "low" | "medium" | "high",
+  "notes": "short practical explanation",
+  "fat_storage": "short note",
+  "ten_percent_notes": "short note"
+}}
+"""
+    content = [{"type": "input_text", "text": user_text}]
+    if front_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_image_for_openai(front_photo)})
+    if back_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_image_for_openai(back_photo)})
+    try:
+        response = client.responses.create(model=model_name, input=[{"role": "user", "content": content}])
+        text = getattr(response, "output_text", None) or str(response)
+        data = json.loads(text.strip().replace("```json", "").replace("```", "").strip())
+        for key in ["bf_low", "bf_high", "bf_mid", "confidence", "notes"]:
+            if key not in data:
+                return None, f"AI response missing key: {key}. Raw response: {text[:500]}"
+        return data, None
+    except Exception as e:
+        return None, f"AI estimate failed: {e}"
+
+
+def load_measurements():
+    return load_csv(
+        MEASUREMENTS_FILE,
+        ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"],
+    )
+
+
+def save_measurements(row):
+    df = load_measurements()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(MEASUREMENTS_FILE, index=False)
+
+
+def latest_measurements():
+    df = load_measurements()
+    if df.empty:
+        return {}
+    return df.iloc[-1].to_dict()
+
+
+def load_physique_ratings():
+    return load_csv(
+        PHYSIQUE_RATING_FILE,
+        ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"],
+    )
+
+
+def save_physique_rating(row):
+    df = load_physique_ratings()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(PHYSIQUE_RATING_FILE, index=False)
+
+
+def run_ai_physique_rating(front_photo, side_photo, back_photo, stats, model_name):
+    client, err = _get_openai_client()
+    if err:
+        return None, err
+    if front_photo is None and side_photo is None and back_photo is None:
+        return None, "Upload at least one physique photo."
+    user_text = f"""
+Rate this male physique for an aesthetic fitness app. Do not identify the person. Return ONLY valid JSON.
+
+Stats:
+{json.dumps(stats, indent=2)}
+
+Schema:
+{{
+  "physique_score": number,
+  "leanness_score": number,
+  "symmetry_score": number,
+  "muscularity_score": number,
+  "confidence": "low" | "medium" | "high",
+  "weak_points": ["short point", "short point", "short point"],
+  "improvements": ["short actionable improvement", "short actionable improvement", "short actionable improvement"],
+  "summary": "short honest summary",
+  "training_priority": ["Chest", "Side delts", "Back width", "Arms", "Legs", "Abs"]
+}}
+
+Scores are out of 15. Be realistic, not flattering.
+"""
+    content = [{"type": "input_text", "text": user_text}]
+    if front_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(front_photo)})
+    if side_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(side_photo)})
+    if back_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(back_photo)})
+    try:
+        response = client.responses.create(model=model_name, input=[{"role": "user", "content": content}])
+        text = getattr(response, "output_text", None) or str(response)
+        data = json.loads(text.strip().replace("```json", "").replace("```", "").strip())
+        required = ["physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary"]
+        for key in required:
+            if key not in data:
+                return None, f"AI response missing key: {key}. Raw response: {text[:500]}"
+        return data, None
+    except Exception as e:
+        return None, f"AI physique rating failed: {e}"
+
+
+def load_custom_plan():
+    return load_csv(CUSTOM_PLAN_FILE, ["workout", "exercise", "sets", "reps", "reason", "day_goal", "plan_name", "timestamp"])
+
+
+def save_ai_custom_plan(ai_plan):
+    rows = []
+    for day in ai_plan.get("days", []):
+        for ex in day.get("exercises", []):
+            rows.append({
+                "workout": day.get("day", ""),
+                "exercise": ex.get("exercise", ""),
+                "sets": ex.get("sets", ""),
+                "reps": ex.get("reps", ""),
+                "reason": ex.get("reason", ""),
+                "day_goal": day.get("goal", ""),
+                "plan_name": ai_plan.get("plan_name", "AI Custom Plan"),
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+    if not rows:
+        return False
+    pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
+    return True
+
+
+def save_fallback_custom_plan(plan):
+    rows = []
+    for workout, exercises in plan.items():
+        for exercise, sets, reps in exercises:
+            rows.append({
+                "workout": workout,
+                "exercise": exercise,
+                "sets": sets,
+                "reps": reps,
+                "reason": "Fallback weak-point aesthetic plan",
+                "day_goal": "Aesthetic development",
+                "plan_name": "Fallback Aesthetic Weakpoint Plan",
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+    pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
+
+
+def run_ai_custom_plan_from_physique(rating, measurements, goals, model_name):
+    client, err = _get_openai_client()
+    if err:
+        return None, err
+    prompt = f"""
+You are an expert bodybuilding coach making a custom workout plan for an aesthetic-focused lifter.
+
+DO NOT simply repeat the user's current PPPPLA routine.
+Choose the best exercises from this exercise library:
+{json.dumps(EXERCISE_LIBRARY, indent=2)}
+
+Physique rating:
+{json.dumps(rating, indent=2)}
+
+Measurements:
+{json.dumps(measurements, indent=2)}
+
+Goal:
+{goals}
+
+Create a 6-day split:
+Push 1 - Strength Bias
+Pull 1 - Width Bias
+Push 2 - Hypertrophy Bias
+Pull 2 - Thickness Bias
+Legs
+Aesthetic Weakpoint Day
+
+Each day: 5-8 exercises. Include exercise, sets, reps, reason.
+Return ONLY valid JSON:
+{{
+  "plan_name": "string",
+  "rationale": "short summary",
+  "weekly_focus": ["focus 1", "focus 2", "focus 3"],
+  "days": [
+    {{
+      "day": "Push 1 - Strength Bias",
+      "goal": "short day goal",
+      "exercises": [
+        {{"exercise": "exercise name", "sets": 3, "reps": "8-12", "reason": "why selected"}}
+      ]
+    }}
+  ]
+}}
+"""
+    try:
+        response = client.responses.create(model=model_name, input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}])
+        text = getattr(response, "output_text", None) or str(response)
+        data = json.loads(text.strip().replace("```json", "").replace("```", "").strip())
+        if "days" not in data:
+            return None, f"AI response missing 'days'. Raw: {text[:500]}"
+        return data, None
+    except Exception as e:
+        return None, f"AI custom plan failed: {e}"
+
 st.set_page_config(page_title=APP_TITLE, layout="centered")
 
 st.markdown("""
@@ -1543,9 +1932,9 @@ div[data-testid="stMetric"] { background: rgba(15,23,42,.65); border: 1px solid 
 
 st.markdown("""
 <div class="nw-hero">
-    <div class="nw-hero-title">⚡ Tyson Training</div>
-    <div class="nw-hero-sub">Nightwing-inspired PPPPLA tracker</div>
-    <span class="nw-badge">Bench Strength • V-Taper • Delts • Cardio • XP System</span>
+    <div class="nw-hero-title">⚡ Training System</div>
+    <div class="nw-hero-sub">PPPPLA tracker</div>
+    <span class="nw-badge">Push • Pull • Legs • Aesthetics • Cardio</span>
     <div class="nw-scanline"></div>
 </div>
 """, unsafe_allow_html=True)
@@ -1878,26 +2267,70 @@ elif page == "Physique":
 
 elif page == "Today":
     st.header("Today’s Workout")
-    workout = st.selectbox("Workout", list(ROUTINE.keys()))
+
+    workout_source = st.radio(
+        "Workout plan",
+        ["PPPPLA Split", "AI Custom Workout Plan"],
+        horizontal=True,
+    )
+
+    custom_plan_df = load_custom_plan()
+
+    if workout_source == "AI Custom Workout Plan":
+        if custom_plan_df.empty:
+            st.warning("No AI custom workout plan found yet. Go to Physique → Generate AI Custom Plan first.")
+            active_routine = ROUTINE
+            workout_source = "PPPPLA Split"
+        else:
+            active_routine = {}
+            custom_plan_df["sets"] = pd.to_numeric(custom_plan_df["sets"], errors="coerce").fillna(0).astype(int)
+
+            for workout_name in custom_plan_df["workout"].dropna().astype(str).unique():
+                day_df = custom_plan_df[custom_plan_df["workout"].astype(str) == workout_name]
+                active_routine[workout_name] = [
+                    (
+                        str(row["exercise"]),
+                        int(row["sets"]) if int(row["sets"]) > 0 else 3,
+                        str(row["reps"]),
+                    )
+                    for _, row in day_df.iterrows()
+                ]
+
+            plan_name = custom_plan_df["plan_name"].dropna().astype(str).iloc[-1] if "plan_name" in custom_plan_df.columns and not custom_plan_df["plan_name"].dropna().empty else "AI Custom Plan"
+            st.success(f"Using: {plan_name}")
+    else:
+        active_routine = ROUTINE
+
+    workout = st.selectbox("Workout", list(active_routine.keys()))
     workout_date = st.date_input("Date", value=date.today())
 
     if workout == "Rest":
         st.info("Rest day. Walk, stretch, eat protein, sleep.")
     else:
-        total_sets = sum(ex[1] for ex in ROUTINE[workout])
+        total_sets = sum(ex[1] for ex in active_routine[workout])
         completed_sets = completed_sets_for_day(load_log(), workout_date, workout)
         percent = 0 if total_sets == 0 else min((completed_sets / total_sets) * 100, 100)
         st.caption(f"Target volume: {total_sets} working sets")
         st.markdown(f"""<div class="mission-card"><div class="mission-title">MISSION PROGRESS</div><div class="progress-track"><div class="progress-fill" style="--progress: {percent:.1f}%;"></div></div><div class="progress-label">{completed_sets}/{total_sets} sets complete — {percent:.1f}%</div></div>""", unsafe_allow_html=True)
 
-        for exercise, sets, reps_target in ROUTINE[workout]:
+        for exercise, sets, reps_target in active_routine[workout]:
             with st.expander(f"⚡ {exercise}", expanded=True):
                 st.markdown(f"""<div class="nw-exercise-card"><div class="nw-card-title">{exercise}</div><div class="nw-small">{sets} sets × {reps_target}</div></div>""", unsafe_allow_html=True)
 
-                if exercise == "Barbell Bench Press (Strength)":
-                    st.markdown("""<div class="nw-note"><b>Strength bench:</b> heavy top set of 3-5 reps, then 3 back-off sets of 5-8 reps. Rest 3-5 minutes.</div>""", unsafe_allow_html=True)
+                if exercise in ["Barbell Bench Press (Strength)", "Barbell Bench Press"]:
+                    st.markdown("""<div class="nw-note"><b>Strength bench:</b> heavy top set of 3-5 reps, then back-off work. Rest 3-5 minutes.</div>""", unsafe_allow_html=True)
                 if exercise == "Paused Barbell Bench Press":
                     st.markdown("""<div class="nw-note"><b>Paused bench:</b> lighter bench with a 1-2 second dead stop on the chest. No bounce.</div>""", unsafe_allow_html=True)
+
+                if workout_source == "AI Custom Workout Plan" and not custom_plan_df.empty and "reason" in custom_plan_df.columns:
+                    reason_rows = custom_plan_df[
+                        (custom_plan_df["workout"].astype(str) == str(workout)) &
+                        (custom_plan_df["exercise"].astype(str) == str(exercise))
+                    ]
+                    if not reason_rows.empty:
+                        reason = str(reason_rows.iloc[0].get("reason", ""))
+                        if reason and reason.lower() != "nan":
+                            st.caption(f"AI reason: {reason}")
 
                 last = get_last_sets(load_log(), exercise)
                 if last is not None:
@@ -1908,9 +2341,9 @@ elif page == "Today":
                 for set_no in range(1, sets + 1):
                     col1, col2 = st.columns(2)
                     with col1:
-                        weight = st.number_input(f"{exercise} set {set_no} kg", min_value=0.0, step=2.5, key=f"{workout}-{exercise}-{set_no}-w", placeholder="kg")
+                        weight = st.number_input(f"{exercise} set {set_no} kg", min_value=0.0, step=2.5, key=f"{workout_source}-{workout}-{exercise}-{set_no}-w", placeholder="kg")
                     with col2:
-                        reps = st.number_input(f"{exercise} set {set_no} reps", min_value=0, step=1, key=f"{workout}-{exercise}-{set_no}-r", placeholder="reps")
+                        reps = st.number_input(f"{exercise} set {set_no} reps", min_value=0, step=1, key=f"{workout_source}-{workout}-{exercise}-{set_no}-r", placeholder="reps")
 
                     if weight > 0 and reps > 0:
                         changed, is_pr, current_1rm, previous_best = save_set_auto(workout_date, workout, exercise, set_no, weight, reps)
