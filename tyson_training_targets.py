@@ -621,6 +621,15 @@ def get_bodyweight_stats():
 
 
 
+
+def save_bodyfat_estimate(row):
+    """
+    Saves one body fat estimate row to bodyfat_log.csv.
+    """
+    df = load_bodyfat_log()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(BODYFAT_FILE, index=False)
+
+
 def bodyfat_outputs(weight_kg, bf_percent, target_bf=10.0):
     """
     Returns fat mass, lean mass, target weight, and fat to lose.
