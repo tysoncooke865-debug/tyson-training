@@ -1969,76 +1969,76 @@ st.markdown("""
 .block-container { padding-top: 1.4rem; padding-bottom: 3rem; max-width: 980px; }
 .stApp {
     background:
-        radial-gradient(circle at 15% 15%, rgba(56,189,248,0.35), transparent 28%),
-        radial-gradient(circle at 85% 30%, rgba(37,99,235,0.30), transparent 32%),
-        radial-gradient(circle at 50% 90%, rgba(14,165,233,0.20), transparent 35%),
-        linear-gradient(135deg, #020617, #071426, #020617);
+        radial-gradient(circle at 15% 15%, rgba(255,51,51,0.35), transparent 28%),
+        radial-gradient(circle at 85% 30%, rgba(217,4,41,0.30), transparent 32%),
+        radial-gradient(circle at 50% 90%, rgba(230,0,0,0.20), transparent 35%),
+        linear-gradient(135deg, #050000, #071426, #050000);
     background-size: 180% 180%;
     animation: redShift 12s ease infinite;
 }
 @keyframes redShift { 0% { background-position: 0% 30%; } 50% { background-position: 100% 70%; } 100% { background-position: 0% 30%; } }
-section[data-testid="stSidebar"] { background: linear-gradient(180deg, #020617, #082f49, #020617); }
+section[data-testid="stSidebar"] { background: linear-gradient(180deg, #050000, #260000, #050000); }
 div[role="radiogroup"] label {
-    background: rgba(14,165,233,0.10); border: 1px solid rgba(56,189,248,0.25);
+    background: rgba(230,0,0,0.10); border: 1px solid rgba(255,51,51,0.25);
     border-radius: 14px; padding: 8px 12px; margin-bottom: 8px; transition: .2s ease;
 }
-div[role="radiogroup"] label:hover { background: rgba(56,189,248,0.25); box-shadow: 0 0 14px rgba(56,189,248,.35); }
+div[role="radiogroup"] label:hover { background: rgba(255,51,51,0.25); box-shadow: 0 0 14px rgba(255,51,51,.35); }
 .nw-hero {
     padding: 24px; border-radius: 24px; margin: 8px 0 24px 0;
-    background: linear-gradient(135deg, rgba(7,20,38,0.98) 0%, rgba(15,39,68,0.98) 55%, rgba(6,17,31,0.98) 100%);
-    border: 1px solid rgba(56, 189, 248, 0.55);
-    box-shadow: 0 0 18px rgba(56, 189, 248, 0.22), inset 0 0 18px rgba(56, 189, 248, 0.07);
+    background: linear-gradient(135deg, rgba(26,0,0,0.98) 0%, rgba(38,0,0,0.98) 55%, rgba(18,0,0,0.98) 100%);
+    border: 1px solid rgba(255, 51, 51, 0.55);
+    box-shadow: 0 0 18px rgba(255, 51, 51, 0.22), inset 0 0 18px rgba(255, 51, 51, 0.07);
     animation: heroDropIn 1.1s cubic-bezier(.18,.89,.32,1.28), heroGlow 3.2s ease-in-out infinite;
 }
 @keyframes heroDropIn { 0% { opacity: 0; transform: translateY(-35px) scale(.94); filter: blur(10px); } 60% { opacity: 1; transform: translateY(6px) scale(1.015); filter: blur(0); } 100% { transform: translateY(0) scale(1); } }
-@keyframes heroGlow { 0%, 100% { box-shadow: 0 0 18px rgba(56,189,248,.22), inset 0 0 18px rgba(56,189,248,.07); } 50% { box-shadow: 0 0 34px rgba(56,189,248,.42), inset 0 0 24px rgba(56,189,248,.12); } }
-.nw-hero-title { font-size: 32px; font-weight: 900; color: #e0f2fe; letter-spacing: -0.7px; text-shadow: 0 0 12px rgba(186,230,253,.95), 0 0 28px rgba(14,165,233,.75); }
-.nw-hero-sub { margin-top: 5px; color: #bae6fd; font-weight: 750; font-size: 15px; }
-.nw-badge { display: inline-block; margin-top: 14px; padding: 8px 13px; border-radius: 999px; color: #e0f2fe; background: rgba(14, 165, 233, 0.18); border: 1px solid rgba(56, 189, 248, 0.42); font-size: 13px; font-weight: 850; }
-.nw-scanline { height: 3px; width: 100%; margin-top: 16px; border-radius: 999px; background: linear-gradient(90deg, transparent, #38bdf8, #e0f2fe, #38bdf8, transparent); background-size: 220% 100%; animation: scanMove 2.2s linear infinite; box-shadow: 0 0 14px rgba(56,189,248,.8); }
+@keyframes heroGlow { 0%, 100% { box-shadow: 0 0 18px rgba(255,51,51,.22), inset 0 0 18px rgba(255,51,51,.07); } 50% { box-shadow: 0 0 34px rgba(255,51,51,.42), inset 0 0 24px rgba(255,51,51,.12); } }
+.nw-hero-title { font-size: 32px; font-weight: 900; color: #ffe0e0; letter-spacing: -0.7px; text-shadow: 0 0 12px rgba(255,204,204,.95), 0 0 28px rgba(230,0,0,.75); }
+.nw-hero-sub { margin-top: 5px; color: #ffb3b3; font-weight: 750; font-size: 15px; }
+.nw-badge { display: inline-block; margin-top: 14px; padding: 8px 13px; border-radius: 999px; color: #ffe0e0; background: rgba(230, 0, 0, 0.18); border: 1px solid rgba(255, 51, 51, 0.42); font-size: 13px; font-weight: 850; }
+.nw-scanline { height: 3px; width: 100%; margin-top: 16px; border-radius: 999px; background: linear-gradient(90deg, transparent, #ff3333, #ffe0e0, #ff3333, transparent); background-size: 220% 100%; animation: scanMove 2.2s linear infinite; box-shadow: 0 0 14px rgba(255,51,51,.8); }
 @keyframes scanMove { from { background-position: 220% 0; } to { background-position: -220% 0; } }
-.page-transition { padding: 10px 14px; margin: -5px 0 16px 0; border-radius: 14px; color: #e0f2fe; font-weight: 900; background: rgba(14,165,233,.14); border: 1px solid rgba(56,189,248,.28); animation: pageSlideIn .55s ease-out; }
+.page-transition { padding: 10px 14px; margin: -5px 0 16px 0; border-radius: 14px; color: #ffe0e0; font-weight: 900; background: rgba(230,0,0,.14); border: 1px solid rgba(255,51,51,.28); animation: pageSlideIn .55s ease-out; }
 @keyframes pageSlideIn { from { opacity: 0; transform: translateX(-18px); filter: blur(5px); } to { opacity: 1; transform: translateX(0); filter: blur(0); } }
 .nw-exercise-card, .dashboard-card {
-    padding: 14px; border-radius: 16px; background: linear-gradient(135deg, rgba(15,23,42,.72), rgba(7,20,38,.64));
-    border: 1px solid rgba(56, 189, 248, 0.25); margin-bottom: 12px; box-shadow: 0 0 14px rgba(56,189,248,.08);
+    padding: 14px; border-radius: 16px; background: linear-gradient(135deg, rgba(22,0,0,.72), rgba(26,0,0,.64));
+    border: 1px solid rgba(255, 51, 51, 0.25); margin-bottom: 12px; box-shadow: 0 0 14px rgba(255,51,51,.08);
     transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease; animation: cardGlow 4s ease-in-out infinite;
 }
-.nw-exercise-card:hover, .dashboard-card:hover { transform: translateY(-5px) scale(1.01); border-color: rgba(224,242,254,.65); box-shadow: 0 0 34px rgba(56,189,248,.45), inset 0 0 18px rgba(56,189,248,.12); }
-@keyframes cardGlow { 0%, 100% { box-shadow: 0 0 12px rgba(56,189,248,.08); } 50% { box-shadow: 0 0 20px rgba(56,189,248,.16); } }
-.nw-card-title { font-weight: 900; color: #e0f2fe; font-size: 17px; margin-bottom: 4px; }
-.nw-small { color: #7dd3fc; font-weight: 750; font-size: 13px; }
-.nw-note { padding: 12px; border-radius: 14px; background: rgba(14, 165, 233, 0.12); border: 1px solid rgba(56, 189, 248, 0.25); margin: 8px 0 12px 0; }
-.mission-card { padding: 16px; border-radius: 18px; margin: 0 0 18px 0; background: linear-gradient(135deg, rgba(15,23,42,.78), rgba(7,20,38,.75)); border: 1px solid rgba(56,189,248,.34); box-shadow: 0 0 18px rgba(56,189,248,.12); animation: missionEnter .65s ease-out; }
+.nw-exercise-card:hover, .dashboard-card:hover { transform: translateY(-5px) scale(1.01); border-color: rgba(224,242,254,.65); box-shadow: 0 0 34px rgba(255,51,51,.45), inset 0 0 18px rgba(255,51,51,.12); }
+@keyframes cardGlow { 0%, 100% { box-shadow: 0 0 12px rgba(255,51,51,.08); } 50% { box-shadow: 0 0 20px rgba(255,51,51,.16); } }
+.nw-card-title { font-weight: 900; color: #ffe0e0; font-size: 17px; margin-bottom: 4px; }
+.nw-small { color: #ff6666; font-weight: 750; font-size: 13px; }
+.nw-note { padding: 12px; border-radius: 14px; background: rgba(230, 0, 0, 0.12); border: 1px solid rgba(255, 51, 51, 0.25); margin: 8px 0 12px 0; }
+.mission-card { padding: 16px; border-radius: 18px; margin: 0 0 18px 0; background: linear-gradient(135deg, rgba(22,0,0,.78), rgba(26,0,0,.75)); border: 1px solid rgba(255,51,51,.34); box-shadow: 0 0 18px rgba(255,51,51,.12); animation: missionEnter .65s ease-out; }
 @keyframes missionEnter { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
-.mission-title { font-size: 15px; color: #bae6fd; font-weight: 900; margin-bottom: 8px; }
-.progress-track { height: 16px; border-radius: 999px; overflow: hidden; background: rgba(15,23,42,.95); border: 1px solid rgba(56,189,248,.30); }
-.progress-fill { height: 100%; width: var(--progress); border-radius: 999px; background: linear-gradient(90deg, #0284c7, #38bdf8, #e0f2fe); background-size: 200% 100%; animation: progressGlow 1.8s linear infinite, fillGrow .7s ease-out; box-shadow: 0 0 16px rgba(56,189,248,.8); }
+.mission-title { font-size: 15px; color: #ffb3b3; font-weight: 900; margin-bottom: 8px; }
+.progress-track { height: 16px; border-radius: 999px; overflow: hidden; background: rgba(22,0,0,.95); border: 1px solid rgba(255,51,51,.30); }
+.progress-fill { height: 100%; width: var(--progress); border-radius: 999px; background: linear-gradient(90deg, #b00020, #ff3333, #ffe0e0); background-size: 200% 100%; animation: progressGlow 1.8s linear infinite, fillGrow .7s ease-out; box-shadow: 0 0 16px rgba(255,51,51,.8); }
 @keyframes progressGlow { from { background-position: 0% 0; } to { background-position: 200% 0; } }
 @keyframes fillGrow { from { width: 0%; } to { width: var(--progress); } }
-.progress-label { margin-top: 8px; color: #7dd3fc; font-weight: 800; font-size: 13px; }
+.progress-label { margin-top: 8px; color: #ff6666; font-weight: 800; font-size: 13px; }
 .save-banner, .achievement-banner, .pr-banner {
     padding: 16px; margin: 0 0 18px 0; border-radius: 18px;
-    background: linear-gradient(90deg, rgba(3,105,161,.92), rgba(14,165,233,.88), rgba(56,189,248,.92));
-    border: 1px solid rgba(224,242,254,.65); box-shadow: 0 0 30px rgba(56,189,248,.55);
+    background: linear-gradient(90deg, rgba(3,105,161,.92), rgba(230,0,0,.88), rgba(255,51,51,.92));
+    border: 1px solid rgba(224,242,254,.65); box-shadow: 0 0 30px rgba(255,51,51,.55);
     animation: savePop 2.2s ease-out forwards;
 }
-.pr-banner { background: linear-gradient(90deg, rgba(88,28,135,.95), rgba(14,165,233,.92), rgba(250,204,21,.85)); }
-.achievement-banner { background: linear-gradient(90deg, rgba(8,47,73,.95), rgba(2,132,199,.92), rgba(16,185,129,.88)); }
+.pr-banner { background: linear-gradient(90deg, rgba(88,28,135,.95), rgba(230,0,0,.92), rgba(250,204,21,.85)); }
+.achievement-banner { background: linear-gradient(90deg, rgba(8,47,73,.95), rgba(2,132,199,.92), rgba(255, 0, 0,.88)); }
 .save-banner-title { color: white; font-size: 19px; font-weight: 950; }
-.save-banner-sub { color: #e0f2fe; font-size: 13px; font-weight: 800; }
+.save-banner-sub { color: #ffe0e0; font-size: 13px; font-weight: 800; }
 @keyframes savePop { 0% { opacity: 0; transform: translateY(-18px) scale(.95); filter: blur(8px); } 18% { opacity: 1; transform: translateY(0) scale(1.02); filter: blur(0); } 100% { opacity: .95; transform: translateY(0) scale(1); } }
 .heat-row { margin: 8px 0 12px 0; }
-.heat-label { color: #e0f2fe; font-weight: 850; font-size: 14px; margin-bottom: 4px; }
-.stButton button { background: linear-gradient(90deg, #0369a1, #0ea5e9, #38bdf8) !important; color: white !important; border: none !important; border-radius: 14px !important; font-weight: 900 !important; box-shadow: 0 0 15px rgba(56,189,248,.35); transition: .2s ease; }
-.stButton button:hover { transform: scale(1.02); box-shadow: 0 0 26px rgba(56,189,248,.75); }
-div[data-testid="stMetric"] { background: rgba(15,23,42,.65); border: 1px solid rgba(56,189,248,.20); padding: 12px; border-radius: 14px; box-shadow: 0 0 12px rgba(56,189,248,.08); }
+.heat-label { color: #ffe0e0; font-weight: 850; font-size: 14px; margin-bottom: 4px; }
+.stButton button { background: linear-gradient(90deg, #8b0000, #e60000, #ff3333) !important; color: white !important; border: none !important; border-radius: 14px !important; font-weight: 900 !important; box-shadow: 0 0 15px rgba(255,51,51,.35); transition: .2s ease; }
+.stButton button:hover { transform: scale(1.02); box-shadow: 0 0 26px rgba(255,51,51,.75); }
+div[data-testid="stMetric"] { background: rgba(22,0,0,.65); border: 1px solid rgba(255,51,51,.20); padding: 12px; border-radius: 14px; box-shadow: 0 0 12px rgba(255,51,51,.08); }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
 <div class="nw-hero">
-    <div class="nw-hero-title">⚡Training System</div>
+    <div class="nw-hero-title">⚡ Training System</div>
     <div class="nw-hero-sub">PPPPLA tracker</div>
     <span class="nw-badge">Push • Pull • Legs • Aesthetics • Recovery</span>
     <div class="nw-scanline"></div>
@@ -3009,3 +3009,202 @@ textarea:focus {
 </style>
 """, unsafe_allow_html=True)
 
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   ABSOLUTE RED THEME FINAL OVERRIDE
+   This block intentionally loads last.
+============================================================ */
+
+:root {
+    --primary-color: #ff2b2b !important;
+    --background-color: #050000 !important;
+    --secondary-background-color: #160000 !important;
+    --text-color: #ffe0e0 !important;
+}
+
+/* Whole app + every major Streamlit container */
+html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], .main, section.main {
+    background:
+        radial-gradient(circle at 12% 12%, rgba(255, 0, 0, 0.34), transparent 26%),
+        radial-gradient(circle at 88% 22%, rgba(176, 0, 32, 0.30), transparent 30%),
+        radial-gradient(circle at 48% 90%, rgba(139, 0, 0, 0.34), transparent 35%),
+        linear-gradient(135deg, #050000 0%, #160000 48%, #050000 100%) !important;
+    background-size: 180% 180% !important;
+    animation: redBackgroundShift 12s ease infinite !important;
+}
+
+@keyframes redBackgroundShift {
+    0% { background-position: 0% 30%; }
+    50% { background-position: 100% 70%; }
+    100% { background-position: 0% 30%; }
+}
+
+/* Header / hero card */
+.nw-hero,
+[class*="hero"],
+.redline-hero {
+    background:
+        linear-gradient(135deg, rgba(38,0,0,0.98) 0%, rgba(80,0,0,0.98) 55%, rgba(18,0,0,0.98) 100%) !important;
+    border: 1px solid rgba(255, 51, 51, 0.75) !important;
+    box-shadow:
+        0 0 28px rgba(255, 0, 0, 0.46),
+        inset 0 0 22px rgba(255, 0, 0, 0.18) !important;
+}
+
+.nw-hero-title,
+.nw-hero-sub,
+.nw-card-title,
+.nw-small,
+.mission-title,
+.progress-label {
+    color: #ffe0e0 !important;
+    text-shadow: 0 0 10px rgba(255, 51, 51, 0.75) !important;
+}
+
+.nw-badge {
+    color: #ffe0e0 !important;
+    background: rgba(255, 0, 0, 0.22) !important;
+    border: 1px solid rgba(255, 51, 51, 0.75) !important;
+    box-shadow: 0 0 16px rgba(255, 0, 0, 0.45) !important;
+}
+
+.nw-scanline {
+    background: linear-gradient(90deg, transparent, #b00020, #ff3333, #ffb3b3, #ff3333, transparent) !important;
+    box-shadow: 0 0 18px rgba(255, 51, 51, 0.90) !important;
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] > div {
+    background:
+        linear-gradient(180deg, #260000 0%, #100000 50%, #050000 100%) !important;
+}
+
+/* Cards / metrics / expanders */
+div[data-testid="stMetric"],
+.mission-card,
+.nw-exercise-card,
+.dashboard-card,
+div[data-testid="stExpander"],
+details {
+    background:
+        linear-gradient(145deg, rgba(60,0,0,0.96), rgba(15,0,0,0.96)) !important;
+    border: 1px solid rgba(255, 51, 51, 0.70) !important;
+    box-shadow:
+        0 0 22px rgba(255, 0, 0, 0.32),
+        inset 0 0 16px rgba(255, 0, 0, 0.14) !important;
+}
+
+/* Buttons */
+.stButton button,
+button[kind="primary"],
+button[kind="secondary"],
+button {
+    background: linear-gradient(90deg, #8b0000, #d90429, #ff3333) !important;
+    color: white !important;
+    border: 1px solid rgba(255, 102, 102, 0.7) !important;
+    box-shadow: 0 0 18px rgba(255, 0, 0, 0.55) !important;
+}
+
+.stButton button:hover,
+button:hover {
+    box-shadow: 0 0 30px rgba(255, 0, 0, 0.95) !important;
+    border-color: #ff8080 !important;
+}
+
+/* Progress bars */
+.progress-fill,
+.stProgress div div div,
+[data-testid="stProgress"] div div div {
+    background: linear-gradient(90deg, #8b0000, #d90429, #ff3333, #ff9999) !important;
+    box-shadow: 0 0 20px rgba(255, 0, 0, 0.90) !important;
+}
+
+/* Radio, checkboxes, sliders, selectboxes, inputs */
+* {
+    accent-color: #ff2b2b !important;
+}
+
+div[role="radiogroup"] label,
+[data-baseweb="radio"] label,
+[data-baseweb="checkbox"] label {
+    background: rgba(255, 0, 0, 0.12) !important;
+    border: 1px solid rgba(255, 51, 51, 0.50) !important;
+    color: #ffe0e0 !important;
+}
+
+div[role="radiogroup"] label:hover {
+    background: rgba(255, 0, 0, 0.24) !important;
+    box-shadow: 0 0 14px rgba(255, 0, 0, 0.45) !important;
+}
+
+div[role="radiogroup"] label:has(input:checked) {
+    background: linear-gradient(90deg, #8b0000, #ff3333) !important;
+    border-color: #ff9999 !important;
+    box-shadow: 0 0 18px rgba(255, 0, 0, 0.70) !important;
+}
+
+input,
+textarea,
+[data-baseweb="input"],
+[data-baseweb="textarea"],
+[data-baseweb="select"],
+[data-testid="stFileUploader"],
+.stSelectbox div,
+.stNumberInput div {
+    background-color: rgba(22, 0, 0, 0.92) !important;
+    border-color: rgba(255, 51, 51, 0.65) !important;
+    color: #ffe0e0 !important;
+}
+
+input:focus,
+textarea:focus {
+    border-color: #ff3333 !important;
+    box-shadow: 0 0 12px rgba(255, 0, 0, 0.75) !important;
+}
+
+/* Slider track/thumb */
+.stSlider [data-baseweb="slider"] div,
+[data-baseweb="slider"] div {
+    background-color: #ff3333 !important;
+}
+
+[data-baseweb="slider"] [role="slider"] {
+    background-color: #ff3333 !important;
+    box-shadow: 0 0 12px rgba(255,0,0,.9) !important;
+}
+
+/* Text and links */
+h1, h2, h3, h4, h5, h6,
+p, span, label, div {
+    border-color: rgba(255, 51, 51, 0.35);
+}
+
+a {
+    color: #ff6666 !important;
+}
+
+/* Dataframes and tables */
+[data-testid="stDataFrame"],
+[data-testid="stTable"],
+table {
+    border-color: rgba(255, 51, 51, 0.55) !important;
+}
+
+/* Alerts */
+[data-testid="stAlert"] {
+    background: rgba(80, 0, 0, 0.90) !important;
+    border-color: rgba(255, 51, 51, 0.70) !important;
+    color: #ffe0e0 !important;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar-thumb {
+    background: #d90429 !important;
+    box-shadow: 0 0 10px rgba(255,0,0,.9) !important;
+}
+</style>
+""", unsafe_allow_html=True)
