@@ -7,7 +7,7 @@ import base64
 import json
 import math
 
-APP_TITLE = "Tyson Training"
+APP_TITLE = "Training Tracker"
 LOG_FILE = Path("workout_log.csv")
 BODYWEIGHT_FILE = Path("bodyweight_log.csv")
 CARDIO_FILE = Path("cardio_log.csv")
@@ -681,8 +681,8 @@ div[data-testid="stMetric"] { background: rgba(15,23,42,.65); border: 1px solid 
 st.markdown("""
 <div class="nw-hero">
     <div class="nw-hero-title">⚡ Tyson Training</div>
-    <div class="nw-hero-sub">Nightwing-inspired PPPPLA tracker</div>
-    <span class="nw-badge">Bench Strength • V-Taper • Delts • Cardio • XP System</span>
+    <div class="nw-hero-sub">PPPPLA tracker</div>
+    <span class="nw-badge">Push • Pull • Legs • Aesthetics • Recover</span>
     <div class="nw-scanline"></div>
 </div>
 """, unsafe_allow_html=True)
@@ -709,7 +709,7 @@ if st.session_state.achievement_message:
 df = load_log()
 
 if page == "Home":
-    st.header("Command Centre")
+    st.header("Player Stats")
     summary = workout_summary(df)
     xp_percent = min((summary["xp_into_level"] / summary["xp_needed"]) * 100, 100)
     bench_percent = min((summary["best_bench_1rm"] / 100) * 100, 100)
