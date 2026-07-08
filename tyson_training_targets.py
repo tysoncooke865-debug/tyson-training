@@ -7,12 +7,13 @@ import base64
 import json
 import math
 
-APP_TITLE = "Training Tracker"
+APP_TITLE = "Tyson Training"
 LOG_FILE = Path("workout_log.csv")
 BODYWEIGHT_FILE = Path("bodyweight_log.csv")
 CARDIO_FILE = Path("cardio_log.csv")
 BODYFAT_FILE = Path("bodyfat_log.csv")
 TARGETS_FILE = Path("targets.csv")
+PROFILE_FILE = Path("profile.csv")
 ACHIEVEMENT_FILE = Path("achievements.csv")
 
 ROUTINE = {
@@ -99,15 +100,88 @@ MUSCLE_MAP = {
 }
 
 ACHIEVEMENTS = {
+    # App / logging
     "first_set": ("⚡ First Signal", "Logged your first set."),
     "first_workout": ("🦇 Patrol Started", "Logged 10 total sets."),
-    "bench_90": ("💪 90kg Bench Signal", "Logged 90kg or more on bench."),
-    "bench_100_est": ("🏆 100kg Bench Quest", "Estimated 1RM reached 100kg."),
     "hundred_sets": ("🔥 100 Set Streak", "Logged 100 total working sets."),
-    "cardio_100": ("🫀 Engine Built", "Logged 100 total cardio minutes."),
-    "delts_50": ("🪽 Wing Build", "Logged 50 delt/rear-delt sets."),
-}
+    "five_hundred_sets": ("⚔️ 500 Set Veteran", "Logged 500 total working sets."),
+    "thousand_sets": ("👑 1000 Set Machine", "Logged 1000 total working sets."),
 
+    # Consistency
+    "three_day_streak": ("🔥 3 Day Streak", "Logged workouts on 3 different days."),
+    "seven_day_streak": ("⚡ 7 Day Streak", "Logged workouts on 7 different days."),
+    "fourteen_day_streak": ("🦾 14 Day Discipline", "Logged workouts on 14 different days."),
+    "thirty_day_streak": ("🗿 30 Day Weapon", "Logged workouts on 30 different days."),
+    "full_ppppla_week": ("💎 Full PPPPLA Week", "Logged all 6 training days at least once."),
+
+    # Bench milestones
+    "bench_60": ("🏋️ 1 Plate Bench", "Logged a 60kg+ bench press."),
+    "bench_80": ("⚡ 80kg Bench", "Logged an 80kg+ bench press."),
+    "bench_90": ("💪 90kg Bench Signal", "Logged 90kg or more on bench."),
+    "bench_100": ("🏆 100kg Bench Club", "Logged a 100kg+ bench press."),
+    "bench_110": ("🦾 110kg Bench", "Logged a 110kg+ bench press."),
+    "bench_120": ("👑 120kg Bench", "Logged a 120kg+ bench press."),
+    "bench_100_est": ("🏆 100kg Bench Quest", "Estimated 1RM reached 100kg."),
+    "bench_120_est": ("👑 120kg Bench Quest", "Estimated 1RM reached 120kg."),
+    "bench_bw": ("⚖️ Bodyweight Bench", "Estimated bench 1RM reached bodyweight."),
+    "bench_1_25_bw": ("🦇 1.25× BW Bench", "Estimated bench 1RM reached 1.25× bodyweight."),
+    "bench_1_5_bw": ("☀️ 1.5× BW Bench", "Estimated bench 1RM reached 1.5× bodyweight."),
+
+    # Squat milestones
+    "squat_100": ("🦵 100kg Squat", "Logged a 100kg+ squat."),
+    "squat_140": ("⚔️ 2 Plate Squat", "Logged a 140kg+ squat."),
+    "squat_160": ("🦾 160kg Squat", "Logged a 160kg+ squat."),
+    "squat_180": ("🗿 180kg Squat", "Logged a 180kg+ squat."),
+    "squat_200": ("👑 200kg Squat", "Logged a 200kg+ squat."),
+    "squat_1_5_bw": ("⚖️ 1.5× BW Squat", "Estimated squat 1RM reached 1.5× bodyweight."),
+    "squat_2_bw": ("☀️ 2× BW Squat", "Estimated squat 1RM reached 2× bodyweight."),
+
+    # Bodyweight / bulking / cutting
+    "first_bw_log": ("⚖️ Scale Online", "Logged bodyweight for the first time."),
+    "bw_75": ("🏃 75kg Checkpoint", "Logged bodyweight at or below 75kg."),
+    "bw_80": ("🦾 80kg Frame", "Logged bodyweight at or above 80kg."),
+    "bw_85": ("🗿 85kg Bulk Mode", "Logged bodyweight at or above 85kg."),
+    "bulk_2kg": ("📈 Lean Bulk Started", "Gained 2kg from your lowest logged bodyweight."),
+    "bulk_5kg": ("🦾 5kg Bulk Arc", "Gained 5kg from your lowest logged bodyweight."),
+    "cut_2kg": ("✂️ Cut Started", "Dropped 2kg from your highest logged bodyweight."),
+    "cut_5kg": ("🔥 5kg Cut Arc", "Dropped 5kg from your highest logged bodyweight."),
+
+    # Body fat
+    "first_bf_log": ("📸 Body Fat Scan", "Saved your first body fat estimate."),
+    "bf_under_15": ("💎 Under 15%", "Body fat estimate reached under 15%."),
+    "bf_under_13": ("🦇 Under 13%", "Body fat estimate reached under 13%."),
+    "bf_under_12": ("⚡ Under 12%", "Body fat estimate reached under 12%."),
+    "bf_under_10": ("☀️ 10% Club", "Body fat estimate reached 10% or lower."),
+    "bf_target_hit": ("🎯 Body Fat Target Hit", "Reached your saved body fat target."),
+
+    # Cardio
+    "first_cardio": ("🫀 Engine Started", "Logged your first cardio session."),
+    "cardio_100": ("🫀 Engine Built", "Logged 100 total cardio minutes."),
+    "cardio_300": ("🏃 300 Minute Engine", "Logged 300 total cardio minutes."),
+    "cardio_1000": ("⚡ 1000 Minute Engine", "Logged 1000 total cardio minutes."),
+    "cardio_5k_total": ("🛣️ 5km Total", "Logged 5km total cardio distance."),
+    "cardio_25k_total": ("🛣️ 25km Total", "Logged 25km total cardio distance."),
+    "cardio_100k_total": ("🌏 100km Total", "Logged 100km total cardio distance."),
+    "boxing_logged": ("🥊 Sparring Logged", "Logged a boxing cardio session."),
+
+    # Muscle group volume
+    "chest_50": ("🛡️ 50 Chest Sets", "Logged 50 chest sets."),
+    "chest_150": ("🛡️ Chest Built", "Logged 150 chest sets."),
+    "back_50": ("🪽 50 Back Sets", "Logged 50 back sets."),
+    "back_150": ("🪽 V-Taper Built", "Logged 150 back sets."),
+    "delts_50": ("🪽 Wing Build", "Logged 50 delt/rear-delt sets."),
+    "delts_150": ("💎 Capped Delts", "Logged 150 delt/rear-delt sets."),
+    "arms_100": ("💪 Arm Arc", "Logged 100 biceps/triceps sets."),
+    "legs_100": ("🦵 Leg Foundation", "Logged 100 leg/calf sets."),
+    "abs_50": ("腹 Core Signal", "Logged 50 ab sets."),
+
+    # Rank milestones
+    "aesthetic_tier": ("💎 Aesthetic Tier", "Reached level 40."),
+    "elite_physique": ("⚡ Elite Physique", "Reached level 60."),
+    "chad_lite": ("🗿 Chad-Lite", "Reached level 75."),
+    "chad": ("👑 Chad", "Reached level 90."),
+    "true_adam": ("☀️ True Adam", "Reached level 100."),
+}
 
 def load_csv(path, columns):
     if path.exists():
@@ -262,12 +336,106 @@ def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
     return True, is_pr, current_1rm, previous_best
 
 
+
+def load_profile():
+    return load_csv(
+        PROFILE_FILE,
+        ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"]
+    )
+
+
+def save_profile(height_cm, bodyweight_kg, bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score):
+    base_level = calculate_starting_level(bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score)
+    df = pd.DataFrame([{
+        "height_cm": height_cm,
+        "bodyweight_kg": bodyweight_kg,
+        "bench_e1rm": bench_e1rm,
+        "squat_e1rm": squat_e1rm,
+        "training_years": training_years,
+        "physique_score": physique_score,
+        "leanness_score": leanness_score,
+        "base_level": base_level,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }])
+    df.to_csv(PROFILE_FILE, index=False)
+    return base_level
+
+
+def get_base_level():
+    profile = load_profile()
+    if profile.empty:
+        return 1
+    try:
+        return int(float(profile.iloc[-1]["base_level"]))
+    except Exception:
+        return 1
+
+
+def calculate_starting_level(bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score):
+    level = 1
+
+    # Bench strength points
+    if bench_e1rm >= 120:
+        level += 28
+    elif bench_e1rm >= 100:
+        level += 22
+    elif bench_e1rm >= 90:
+        level += 18
+    elif bench_e1rm >= 80:
+        level += 14
+    elif bench_e1rm >= 60:
+        level += 8
+
+    # Squat strength points
+    if squat_e1rm >= 180:
+        level += 18
+    elif squat_e1rm >= 140:
+        level += 14
+    elif squat_e1rm >= 100:
+        level += 9
+
+    # Training age
+    if training_years >= 5:
+        level += 16
+    elif training_years >= 3:
+        level += 12
+    elif training_years >= 1:
+        level += 7
+
+    # Physique/leanness self-ratings
+    level += int(physique_score)
+    level += int(leanness_score)
+
+    return max(1, min(int(level), 100))
+
+
+def rank_name(level):
+    level = int(level)
+    if level >= 100:
+        return "☀️ True Adam"
+    if level >= 90:
+        return "👑 Chad"
+    if level >= 75:
+        return "🗿 Chad-Lite"
+    if level >= 60:
+        return "⚡ Elite Physique"
+    if level >= 40:
+        return "💎 Aesthetic Tier"
+    if level >= 25:
+        return "🦾 Athlete"
+    if level >= 10:
+        return "⚔️ Trainee"
+    return "🌱 Rookie"
+
+
+
 def workout_summary(df):
     df = normalise_workout_log(df.copy())
     if df.empty:
         return {
             "total_sets": 0, "total_reps": 0, "best_bench_1rm": 0, "latest_bw": 0,
-            "xp": 0, "level": 1, "xp_into_level": 0, "xp_needed": 100
+            "xp": 0, "level": get_base_level(), "rank": rank_name(get_base_level()), "base_level": get_base_level(),
+            "xp_into_level": 0, "xp_needed": 500
         }
     df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0)
     df["reps"] = pd.to_numeric(df["reps"], errors="coerce").fillna(0)
@@ -286,7 +454,9 @@ def workout_summary(df):
     cardio_minutes = float(cardio["minutes"].sum()) if not cardio.empty else 0
 
     xp = int(total_sets * 10 + cardio_minutes * 2)
-    level = max(1, xp // 500 + 1)
+    base_level = get_base_level()
+    earned_levels = xp // 500
+    level = max(1, min(base_level + earned_levels, 100))
     xp_into_level = xp % 500
 
     bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
@@ -297,8 +467,8 @@ def workout_summary(df):
 
     return {
         "total_sets": total_sets, "total_reps": total_reps, "best_bench_1rm": best_bench_1rm,
-        "latest_bw": latest_bw, "xp": xp, "level": level, "xp_into_level": xp_into_level,
-        "xp_needed": 500
+        "latest_bw": latest_bw, "xp": xp, "level": level, "rank": rank_name(level), "base_level": base_level,
+        "xp_into_level": xp_into_level, "xp_needed": 500
     }
 
 
@@ -313,295 +483,199 @@ def muscle_heat_map(df):
     return df.groupby("muscle", as_index=False).size().rename(columns={"size": "sets"}).sort_values("sets", ascending=False)
 
 
+
+def unique_training_days(df):
+    if df.empty or "date" not in df.columns:
+        return 0
+    return df["date"].dropna().astype(str).nunique()
+
+
+def logged_all_ppppla_days(df):
+    if df.empty or "workout" not in df.columns:
+        return False
+    required = {
+        "Push 1 - Strength",
+        "Pull 1 - Back Thickness",
+        "Push 2 - Hypertrophy",
+        "Pull 2 - Width / V-Taper",
+        "Legs",
+        "Aesthetics",
+    }
+    logged = set(df["workout"].dropna().astype(str).unique())
+    return required.issubset(logged)
+
+
+def get_bodyweight_stats():
+    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    if bw_df.empty:
+        return {"latest": None, "min": None, "max": None, "count": 0}
+    bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
+    valid = bw_df[bw_df["bodyweight"] > 0]
+    if valid.empty:
+        return {"latest": None, "min": None, "max": None, "count": 0}
+    return {
+        "latest": float(valid.iloc[-1]["bodyweight"]),
+        "min": float(valid["bodyweight"].min()),
+        "max": float(valid["bodyweight"].max()),
+        "count": len(valid),
+    }
+
+
+def get_bodyfat_stats():
+    bf_df = load_bodyfat_log()
+    if bf_df.empty:
+        return {"latest": None, "min": None, "count": 0}
+    bf_df["bf_mid"] = pd.to_numeric(bf_df["bf_mid"], errors="coerce").fillna(0)
+    valid = bf_df[bf_df["bf_mid"] > 0]
+    if valid.empty:
+        return {"latest": None, "min": None, "count": 0}
+    return {
+        "latest": float(valid.iloc[-1]["bf_mid"]),
+        "min": float(valid["bf_mid"].min()),
+        "count": len(valid),
+    }
+
+
+def get_cardio_stats():
+    cardio = load_csv(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"])
+    if cardio.empty:
+        return {"minutes": 0, "distance": 0, "count": 0, "types": set()}
+    cardio["minutes"] = pd.to_numeric(cardio.get("minutes", 0), errors="coerce").fillna(0)
+    cardio["distance_km"] = pd.to_numeric(cardio.get("distance_km", 0), errors="coerce").fillna(0)
+    return {
+        "minutes": float(cardio["minutes"].sum()),
+        "distance": float(cardio["distance_km"].sum()),
+        "count": len(cardio),
+        "types": set(cardio.get("type", pd.Series(dtype=str)).dropna().astype(str).tolist()),
+    }
+
+
+def muscle_sets_count(heat, names):
+    if heat.empty:
+        return 0
+    return int(heat[heat["muscle"].isin(names)]["sets"].sum())
+
+
 def check_achievements():
     df = load_log()
     summary = workout_summary(df)
     heat = muscle_heat_map(df)
-    cardio = load_csv(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"])
-    cardio["minutes"] = pd.to_numeric(cardio.get("minutes", 0), errors="coerce").fillna(0)
-    cardio_minutes = float(cardio["minutes"].sum()) if not cardio.empty else 0
+    bw = get_bodyweight_stats()
+    bf = get_bodyfat_stats()
+    cardio = get_cardio_stats()
 
     unlocked = []
-    if summary["total_sets"] >= 1 and save_achievement("first_set"):
-        unlocked.append(ACHIEVEMENTS["first_set"][0])
-    if summary["total_sets"] >= 10 and save_achievement("first_workout"):
-        unlocked.append(ACHIEVEMENTS["first_workout"][0])
-    if summary["total_sets"] >= 100 and save_achievement("hundred_sets"):
-        unlocked.append(ACHIEVEMENTS["hundred_sets"][0])
-    if summary["best_bench_1rm"] >= 100 and save_achievement("bench_100_est"):
-        unlocked.append(ACHIEVEMENTS["bench_100_est"][0])
+
+    def unlock(key):
+        if key in ACHIEVEMENTS and save_achievement(key):
+            unlocked.append(ACHIEVEMENTS[key][0])
+
+    # Basic logging
+    if summary["total_sets"] >= 1: unlock("first_set")
+    if summary["total_sets"] >= 10: unlock("first_workout")
+    if summary["total_sets"] >= 100: unlock("hundred_sets")
+    if summary["total_sets"] >= 500: unlock("five_hundred_sets")
+    if summary["total_sets"] >= 1000: unlock("thousand_sets")
+
+    # Consistency
+    days = unique_training_days(df)
+    if days >= 3: unlock("three_day_streak")
+    if days >= 7: unlock("seven_day_streak")
+    if days >= 14: unlock("fourteen_day_streak")
+    if days >= 30: unlock("thirty_day_streak")
+    if logged_all_ppppla_days(df): unlock("full_ppppla_week")
+
+    # Strength - bench
+    if summary["best_bench_1rm"] >= 100: unlock("bench_100_est")
+    if summary["best_bench_1rm"] >= 120: unlock("bench_120_est")
+
+    if bw["latest"]:
+        if summary["best_bench_1rm"] >= bw["latest"]: unlock("bench_bw")
+        if summary["best_bench_1rm"] >= bw["latest"] * 1.25: unlock("bench_1_25_bw")
+        if summary["best_bench_1rm"] >= bw["latest"] * 1.5: unlock("bench_1_5_bw")
 
     bench = df[df["exercise"] == "Barbell Bench Press (Strength)"].copy() if not df.empty else pd.DataFrame()
     if not bench.empty:
         bench["weight"] = pd.to_numeric(bench["weight"], errors="coerce").fillna(0)
-        if bench["weight"].max() >= 90 and save_achievement("bench_90"):
-            unlocked.append(ACHIEVEMENTS["bench_90"][0])
+        max_bench = bench["weight"].max()
+        if max_bench >= 60: unlock("bench_60")
+        if max_bench >= 80: unlock("bench_80")
+        if max_bench >= 90: unlock("bench_90")
+        if max_bench >= 100: unlock("bench_100")
+        if max_bench >= 110: unlock("bench_110")
+        if max_bench >= 120: unlock("bench_120")
 
-    if cardio_minutes >= 100 and save_achievement("cardio_100"):
-        unlocked.append(ACHIEVEMENTS["cardio_100"][0])
+    # Strength - squat
+    squat = df[df["exercise"] == "Barbell Back Squat"].copy() if not df.empty else pd.DataFrame()
+    squat_e1rm = 0
+    if not squat.empty:
+        squat["weight"] = pd.to_numeric(squat["weight"], errors="coerce").fillna(0)
+        squat["reps"] = pd.to_numeric(squat["reps"], errors="coerce").fillna(0)
+        squat["estimated_1rm"] = squat.apply(lambda x: estimated_1rm(float(x["weight"]), int(x["reps"])), axis=1)
+        squat_e1rm = float(squat["estimated_1rm"].max())
+        max_squat = squat["weight"].max()
+        if max_squat >= 100: unlock("squat_100")
+        if max_squat >= 140: unlock("squat_140")
+        if max_squat >= 160: unlock("squat_160")
+        if max_squat >= 180: unlock("squat_180")
+        if max_squat >= 200: unlock("squat_200")
 
-    if not heat.empty:
-        delt_sets = heat[heat["muscle"].isin(["Delts", "Rear Delts"])]["sets"].sum()
-        if delt_sets >= 50 and save_achievement("delts_50"):
-            unlocked.append(ACHIEVEMENTS["delts_50"][0])
+    if bw["latest"] and squat_e1rm:
+        if squat_e1rm >= bw["latest"] * 1.5: unlock("squat_1_5_bw")
+        if squat_e1rm >= bw["latest"] * 2: unlock("squat_2_bw")
+
+    # Bodyweight / cut / bulk
+    if bw["count"] >= 1: unlock("first_bw_log")
+    if bw["latest"] and bw["latest"] <= 75: unlock("bw_75")
+    if bw["latest"] and bw["latest"] >= 80: unlock("bw_80")
+    if bw["latest"] and bw["latest"] >= 85: unlock("bw_85")
+    if bw["min"] is not None and bw["latest"] is not None:
+        if bw["latest"] - bw["min"] >= 2: unlock("bulk_2kg")
+        if bw["latest"] - bw["min"] >= 5: unlock("bulk_5kg")
+    if bw["max"] is not None and bw["latest"] is not None:
+        if bw["max"] - bw["latest"] >= 2: unlock("cut_2kg")
+        if bw["max"] - bw["latest"] >= 5: unlock("cut_5kg")
+
+    # Body fat
+    if bf["count"] >= 1: unlock("first_bf_log")
+    if bf["latest"] and bf["latest"] < 15: unlock("bf_under_15")
+    if bf["latest"] and bf["latest"] < 13: unlock("bf_under_13")
+    if bf["latest"] and bf["latest"] < 12: unlock("bf_under_12")
+    if bf["latest"] and bf["latest"] <= 10: unlock("bf_under_10")
+    bf_target = get_target("Body Fat", "Body Fat %")
+    if bf["latest"] and bf_target and bf["latest"] <= bf_target:
+        unlock("bf_target_hit")
+
+    # Cardio
+    if cardio["count"] >= 1: unlock("first_cardio")
+    if cardio["minutes"] >= 100: unlock("cardio_100")
+    if cardio["minutes"] >= 300: unlock("cardio_300")
+    if cardio["minutes"] >= 1000: unlock("cardio_1000")
+    if cardio["distance"] >= 5: unlock("cardio_5k_total")
+    if cardio["distance"] >= 25: unlock("cardio_25k_total")
+    if cardio["distance"] >= 100: unlock("cardio_100k_total")
+    if "Boxing" in cardio["types"]: unlock("boxing_logged")
+
+    # Muscle heat map / volume
+    if muscle_sets_count(heat, ["Chest"]) >= 50: unlock("chest_50")
+    if muscle_sets_count(heat, ["Chest"]) >= 150: unlock("chest_150")
+    if muscle_sets_count(heat, ["Back"]) >= 50: unlock("back_50")
+    if muscle_sets_count(heat, ["Back"]) >= 150: unlock("back_150")
+    delt_sets = muscle_sets_count(heat, ["Delts", "Rear Delts"])
+    if delt_sets >= 50: unlock("delts_50")
+    if delt_sets >= 150: unlock("delts_150")
+    if muscle_sets_count(heat, ["Biceps", "Triceps"]) >= 100: unlock("arms_100")
+    if muscle_sets_count(heat, ["Legs", "Calves"]) >= 100: unlock("legs_100")
+    if muscle_sets_count(heat, ["Abs"]) >= 50: unlock("abs_50")
+
+    # Rank achievements
+    if summary["level"] >= 40: unlock("aesthetic_tier")
+    if summary["level"] >= 60: unlock("elite_physique")
+    if summary["level"] >= 75: unlock("chad_lite")
+    if summary["level"] >= 90: unlock("chad")
+    if summary["level"] >= 100: unlock("true_adam")
 
     return unlocked
-
-
-
-def navy_body_fat_male(height_cm, waist_cm, neck_cm):
-    """US Navy male body fat estimate. Uses inches internally."""
-    try:
-        height_in = float(height_cm) / 2.54
-        waist_in = float(waist_cm) / 2.54
-        neck_in = float(neck_cm) / 2.54
-        if height_in <= 0 or waist_in <= neck_in or neck_in <= 0:
-            return None
-        return 86.010 * math.log10(waist_in - neck_in) - 70.041 * math.log10(height_in) + 36.76
-    except Exception:
-        return None
-
-
-def bodyfat_outputs(weight_kg, bf_percent, target_bf=10.0):
-    try:
-        weight_kg = float(weight_kg)
-        bf_percent = float(bf_percent)
-        fat_mass = weight_kg * (bf_percent / 100)
-        lean_mass = weight_kg - fat_mass
-        target_weight = lean_mass / (1 - target_bf / 100)
-        fat_to_lose = max(weight_kg - target_weight, 0)
-        return fat_mass, lean_mass, target_weight, fat_to_lose
-    except Exception:
-        return None, None, None, None
-
-
-def load_bodyfat_log():
-    return load_csv(
-        BODYFAT_FILE,
-        [
-            "date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm",
-            "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"
-        ]
-    )
-
-
-def save_bodyfat_estimate(row):
-    df = load_bodyfat_log()
-    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(BODYFAT_FILE, index=False)
-
-
-def encode_image_for_openai(uploaded_file):
-    data = uploaded_file.getvalue()
-    mime = uploaded_file.type or "image/jpeg"
-    encoded = base64.b64encode(data).decode("utf-8")
-    return f"data:{mime};base64,{encoded}"
-
-
-def run_ai_bodyfat_estimate(front_photo, back_photo, height_cm, weight_kg, waist_cm, neck_cm, lighting, pump_status, time_of_day, model_name):
-    """
-    Photo-based estimate using OpenAI Vision via the Responses API.
-    Requires OPENAI_API_KEY in environment or Streamlit secrets.
-    """
-    try:
-        from openai import OpenAI
-    except Exception as e:
-        return None, f"OpenAI package not installed. Add 'openai' to requirements.txt. Error: {e}"
-
-    api_key = None
-    try:
-        api_key = st.secrets.get("OPENAI_API_KEY", None)
-    except Exception:
-        api_key = None
-
-    api_key = api_key or os.getenv("OPENAI_API_KEY")
-
-    if not api_key:
-        return None, "Missing OPENAI_API_KEY. Add it to Streamlit secrets or your environment variables."
-
-    client = OpenAI(api_key=api_key)
-
-    content = [
-        {
-            "type": "input_text",
-            "text": f"""
-You are estimating male body fat from physique photos for a fitness tracking app.
-This is not medical advice. Give a realistic range, not a false-precision number.
-
-User stats:
-- Height: {height_cm} cm
-- Bodyweight: {weight_kg} kg
-- Waist: {waist_cm if waist_cm and waist_cm > 0 else "Not provided"}
-- Neck: {neck_cm if neck_cm and neck_cm > 0 else "Not provided"}
-- Lighting: {lighting}
-- Pump status: {pump_status}
-- Time of day: {time_of_day}
-
-Important:
-- Do NOT use waist or neck measurements unless they are actually provided.
-- If waist/neck say "Not provided", base the estimate on photos, height, weight, lighting, pump, and time of day only.
-
-Return ONLY valid JSON with this exact schema:
-{{
-  "bf_low": number,
-  "bf_high": number,
-  "bf_mid": number,
-  "confidence": "low" | "medium" | "high",
-  "notes": "short practical explanation",
-  "fat_storage": "short note",
-  "ten_percent_notes": "short note"
-}}
-
-Rules:
-- Use a range.
-- Be conservative if lighting/pump is flattering.
-- Mention if lower abs/lower back appear to be the main remaining storage only if visible.
-- Do not identify the person.
-"""
-        }
-    ]
-
-    if front_photo is not None:
-        content.append({"type": "input_image", "image_url": encode_image_for_openai(front_photo)})
-    if back_photo is not None:
-        content.append({"type": "input_image", "image_url": encode_image_for_openai(back_photo)})
-
-    if front_photo is None and back_photo is None:
-        return None, "Upload at least one physique photo."
-
-    try:
-        response = client.responses.create(
-            model=model_name,
-            input=[{"role": "user", "content": content}],
-        )
-
-        text = getattr(response, "output_text", None)
-        if not text:
-            text = str(response)
-
-        # Clean possible code fences just in case.
-        text_clean = text.strip().replace("```json", "").replace("```", "").strip()
-        data = json.loads(text_clean)
-
-        required = ["bf_low", "bf_high", "bf_mid", "confidence", "notes"]
-        for key in required:
-            if key not in data:
-                return None, f"AI response missing key: {key}. Raw response: {text[:500]}"
-
-        return data, None
-
-    except Exception as e:
-        return None, f"AI estimate failed: {e}"
-
-
-
-
-def load_targets():
-    return load_csv(
-        TARGETS_FILE,
-        ["target_type", "name", "target_value", "unit", "created_at", "notes"]
-    )
-
-
-def save_or_update_target(target_type, name, target_value, unit, notes=""):
-    df = load_targets()
-    df["target_type"] = df["target_type"].astype(str)
-    df["name"] = df["name"].astype(str)
-
-    mask = (df["target_type"] == str(target_type)) & (df["name"] == str(name))
-    new_row = {
-        "target_type": target_type,
-        "name": name,
-        "target_value": float(target_value),
-        "unit": unit,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-        "notes": notes,
-    }
-
-    if mask.any():
-        df = df.loc[~mask].copy()
-
-    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-    df.to_csv(TARGETS_FILE, index=False)
-
-
-def get_target(target_type, name):
-    df = load_targets()
-    if df.empty:
-        return None
-    matches = df[
-        (df["target_type"].astype(str) == str(target_type)) &
-        (df["name"].astype(str) == str(name))
-    ]
-    if matches.empty:
-        return None
-    try:
-        return float(matches.iloc[-1]["target_value"])
-    except Exception:
-        return None
-
-
-def current_exercise_best_1rm(exercise_name):
-    df = load_log()
-    if df.empty:
-        return 0
-    df = normalise_workout_log(df)
-    ex = df[df["exercise"] == exercise_name].copy()
-    if ex.empty:
-        return 0
-    ex["weight"] = pd.to_numeric(ex["weight"], errors="coerce").fillna(0)
-    ex["reps"] = pd.to_numeric(ex["reps"], errors="coerce").fillna(0)
-    ex["estimated_1rm"] = ex.apply(lambda x: estimated_1rm(float(x["weight"]), int(x["reps"])), axis=1)
-    return float(ex["estimated_1rm"].max())
-
-
-def latest_bodyfat_mid():
-    bf_log = load_bodyfat_log()
-    if bf_log.empty:
-        return None
-    bf_log["bf_mid"] = pd.to_numeric(bf_log["bf_mid"], errors="coerce").fillna(0)
-    valid = bf_log[bf_log["bf_mid"] > 0]
-    if valid.empty:
-        return None
-    return float(valid.iloc[-1]["bf_mid"])
-
-
-def latest_bodyweight_value():
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
-    if bw_df.empty:
-        return None
-    bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
-    valid = bw_df[bw_df["bodyweight"] > 0]
-    if valid.empty:
-        return None
-    return float(valid.iloc[-1]["bodyweight"])
-
-
-def render_target_bar(title, current, target, unit, lower_is_better=False):
-    if current is None or target is None or target <= 0:
-        st.info(f"{title}: set a target and log data to see progress.")
-        return
-
-    if lower_is_better:
-        # For body fat, progress is treated as closeness to target. If current <= target = complete.
-        percent = 100 if current <= target else max(min((target / current) * 100, 100), 0)
-        label = f"{current:.1f}{unit} current / {target:.1f}{unit} target"
-    else:
-        percent = max(min((current / target) * 100, 100), 0)
-        label = f"{current:.1f}{unit} current / {target:.1f}{unit} target"
-
-    st.markdown(
-        f"""
-        <div class="mission-card">
-            <div class="mission-title">{title}</div>
-            <div class="progress-track">
-                <div class="progress-fill" style="--progress: {percent:.1f}%;"></div>
-            </div>
-            <div class="progress-label">{label} — {percent:.1f}%</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
 
 
 st.set_page_config(page_title=APP_TITLE, layout="centered")
@@ -681,13 +755,13 @@ div[data-testid="stMetric"] { background: rgba(15,23,42,.65); border: 1px solid 
 st.markdown("""
 <div class="nw-hero">
     <div class="nw-hero-title">⚡ Tyson Training</div>
-    <div class="nw-hero-sub">PPPPLA tracker</div>
-    <span class="nw-badge">Push • Pull • Legs • Aesthetics • Recover</span>
+    <div class="nw-hero-sub">Nightwing-inspired PPPPLA tracker</div>
+    <span class="nw-badge">Bench Strength • V-Taper • Delts • Cardio • XP System</span>
     <div class="nw-scanline"></div>
 </div>
 """, unsafe_allow_html=True)
 
-page = st.sidebar.radio("Menu", ["Home", "Today", "Cardio", "Progress", "Goals", "Body Fat", "Bodyweight", "Delete Data", "Routine"])
+page = st.sidebar.radio("Menu", ["Home", "Profile", "Today", "Cardio", "Progress", "Goals", "Achievements", "Body Fat", "Bodyweight", "Delete Data", "Routine"])
 st.markdown(f'<div class="page-transition">⚡ {page} module loaded</div>', unsafe_allow_html=True)
 
 for key in ["just_saved_message", "pr_message", "achievement_message"]:
@@ -708,15 +782,18 @@ if st.session_state.achievement_message:
 
 df = load_log()
 
+# Unlock any achievements already earned from existing data/profile.
+check_achievements()
+
 if page == "Home":
-    st.header("Player Stats")
+    st.header("Command Centre")
     summary = workout_summary(df)
     xp_percent = min((summary["xp_into_level"] / summary["xp_needed"]) * 100, 100)
     bench_percent = min((summary["best_bench_1rm"] / 100) * 100, 100)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Level", f"{summary['level']}")
-    c2.metric("XP", f"{summary['xp']}")
+    c2.metric("Rank", summary.get("rank", rank_name(summary["level"])))
     c3.metric("Total Sets", f"{summary['total_sets']}")
 
     c4, c5, c6 = st.columns(3)
@@ -732,9 +809,9 @@ if page == "Home":
 
     st.markdown(f"""
     <div class="mission-card">
-        <div class="mission-title">LEVEL {summary['level']} ATHLETE</div>
+        <div class="mission-title">LEVEL {summary['level']} — {summary.get('rank', rank_name(summary['level']))}</div>
         <div class="progress-track"><div class="progress-fill" style="--progress: {xp_percent:.1f}%;"></div></div>
-        <div class="progress-label">{summary['xp_into_level']}/{summary['xp_needed']} XP to next level</div>
+        <div class="progress-label">Base level {summary.get('base_level', 1)} • {summary['xp_into_level']}/{summary['xp_needed']} XP to next level</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -773,13 +850,55 @@ if page == "Home":
             </div>
             """, unsafe_allow_html=True)
 
-    st.subheader("Achievements")
+    st.subheader("Recent Achievements")
     ach = load_achievements()
     if ach.empty:
-        st.info("No achievements unlocked yet.")
+        st.info("No achievements unlocked yet. Open the Achievements tab to check requirements.")
     else:
-        for _, row in ach.sort_values("date_unlocked", ascending=False).iterrows():
+        st.metric("Achievements", f"{len(ach)}/{len(ACHIEVEMENTS)}")
+        for _, row in ach.sort_values("date_unlocked", ascending=False).head(5).iterrows():
             st.markdown(f"""<div class="dashboard-card"><div class="nw-card-title">{row['name']}</div><div class="nw-small">{row['description']}</div></div>""", unsafe_allow_html=True)
+        st.caption("Open the Achievements tab to view all locked/unlocked achievements.")
+
+
+
+elif page == "Profile":
+    st.header("Athlete Profile")
+    st.info("Set your starting level from your current real-world stats, so you don't start at Level 1.")
+
+    profile = load_profile()
+    latest = profile.iloc[-1].to_dict() if not profile.empty else {}
+
+    c1, c2 = st.columns(2)
+    with c1:
+        height_cm = st.number_input("Height cm", min_value=100.0, max_value=230.0, step=0.5, value=float(latest.get("height_cm", 183.5) or 183.5))
+        bodyweight_kg = st.number_input("Bodyweight kg", min_value=30.0, max_value=200.0, step=0.1, value=float(latest.get("bodyweight_kg", latest_bodyweight_value() or 76.0) or 76.0))
+        bench_e1rm = st.number_input("Current bench estimated 1RM kg", min_value=0.0, max_value=250.0, step=2.5, value=float(latest.get("bench_e1rm", current_exercise_best_1rm("Barbell Bench Press (Strength)") or 96.0) or 96.0))
+    with c2:
+        squat_e1rm = st.number_input("Current squat estimated 1RM kg", min_value=0.0, max_value=350.0, step=2.5, value=float(latest.get("squat_e1rm", current_exercise_best_1rm("Barbell Back Squat") or 140.0) or 140.0))
+        training_years = st.number_input("Training years", min_value=0.0, max_value=30.0, step=0.5, value=float(latest.get("training_years", 3.0) or 3.0))
+        physique_score = st.slider("Physique score", 0, 15, int(float(latest.get("physique_score", 10) or 10)), help="0 beginner, 10 clearly trained, 15 very aesthetic")
+        leanness_score = st.slider("Leanness score", 0, 15, int(float(latest.get("leanness_score", 10) or 10)), help="0 soft, 10 lean/visible abs, 15 very lean")
+
+    preview_level = calculate_starting_level(bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score)
+    st.metric("Calculated Starting Level", f"Level {preview_level} — {rank_name(preview_level)}")
+
+    if st.button("Save Athlete Profile", type="primary"):
+        level = save_profile(height_cm, bodyweight_kg, bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score)
+        check_achievements()
+        st.session_state.just_saved_message = f"PROFILE SAVED — LEVEL {level}"
+        st.rerun()
+
+    st.subheader("Rank System")
+    st.write("🌱 Level 1-9: Rookie")
+    st.write("⚔️ Level 10-24: Trainee")
+    st.write("🦾 Level 25-39: Athlete")
+    st.write("💎 Level 40-59: Aesthetic Tier")
+    st.write("⚡ Level 60-74: Elite Physique")
+    st.write("🗿 Level 75-89: Chad-Lite")
+    st.write("👑 Level 90-99: Chad")
+    st.write("☀️ Level 100: True Adam")
+
 
 
 elif page == "Today":
@@ -955,6 +1074,53 @@ elif page == "Goals":
     else:
         st.dataframe(targets, use_container_width=True)
 
+
+
+
+elif page == "Achievements":
+    st.header("Achievements")
+    st.info("Achievements auto-unlock from your existing logs, bodyweight, body fat, cardio, targets, and profile level.")
+
+    unlocked = check_achievements()
+    if unlocked:
+        st.session_state.achievement_message = " • ".join(unlocked)
+        st.rerun()
+
+    ach = load_achievements()
+    unlocked_ids = set(ach["achievement_id"].astype(str).tolist()) if not ach.empty else set()
+
+    st.metric("Unlocked", f"{len(unlocked_ids)}/{len(ACHIEVEMENTS)}")
+
+    categories = {
+        "Strength": ["bench", "squat"],
+        "Cut/Bulk/Body": ["bw", "bulk", "cut", "bf", "body"],
+        "Cardio": ["cardio", "boxing"],
+        "Consistency": ["streak", "ppppla", "workout", "set"],
+        "Muscle Volume": ["chest", "back", "delts", "arms", "legs", "abs"],
+        "Rank": ["aesthetic", "elite", "chad", "adam"],
+        "All": [""],
+    }
+
+    category = st.selectbox("Category", list(categories.keys()))
+    filters = categories[category]
+
+    for achievement_id, (name, desc) in ACHIEVEMENTS.items():
+        if category != "All" and not any(f in achievement_id for f in filters):
+            continue
+
+        unlocked_status = achievement_id in unlocked_ids
+        status = "✅ UNLOCKED" if unlocked_status else "🔒 LOCKED"
+        css_opacity = "1" if unlocked_status else ".45"
+
+        st.markdown(
+            f"""
+            <div class="dashboard-card" style="opacity:{css_opacity};">
+                <div class="nw-card-title">{name} — {status}</div>
+                <div class="nw-small">{desc}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 elif page == "Body Fat":
@@ -1191,7 +1357,7 @@ elif page == "Bodyweight":
 elif page == "Delete Data":
     st.header("Delete Logged Data")
     st.warning("Use this to remove accidental entries. This permanently edits the CSV file.")
-    log_type = st.selectbox("Choose log", ["Workout", "Cardio", "Body Fat", "Bodyweight", "Targets", "Achievements"])
+    log_type = st.selectbox("Choose log", ["Workout", "Cardio", "Body Fat", "Bodyweight", "Targets", "Profile", "Achievements"])
     if log_type == "Workout":
         path, columns = LOG_FILE, ["date", "workout", "exercise", "set", "weight", "reps", "timestamp"]
     elif log_type == "Cardio":
@@ -1202,6 +1368,8 @@ elif page == "Delete Data":
         path, columns = BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"]
     elif log_type == "Targets":
         path, columns = TARGETS_FILE, ["target_type", "name", "target_value", "unit", "created_at", "notes"]
+    elif log_type == "Profile":
+        path, columns = PROFILE_FILE, ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"]
     else:
         path, columns = ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"]
 
