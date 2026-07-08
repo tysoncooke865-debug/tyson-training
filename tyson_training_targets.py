@@ -56,7 +56,7 @@ SUPABASE_TABLE_SCHEMAS = {
     "custom_workout_plan": ["plan_name", "workout", "exercise", "sets", "reps", "muscle", "reason", "day_goal", "timestamp"],
     "achievements": ["achievement_id", "name", "description", "date_unlocked"],
     "targets": ["target_type", "name", "target_value", "unit", "created_at", "notes"],
-    "profile": ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"],
+    "profile": ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "goal", "current_phase", "focus_areas", "onboarding_complete", "created_at"],
     "avatar_progression": ["date", "level", "rank", "character_class", "build_type", "strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"],
 }
 
@@ -1017,28 +1017,45 @@ def get_target(target_type, name):
 
 
 def load_profile():
-    columns = ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"]
+    columns = [
+        "height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years",
+        "physique_score", "leanness_score", "base_level", "goal", "current_phase",
+        "focus_areas", "onboarding_complete", "created_at"
+    ]
     return df_from_supabase("profile", PROFILE_FILE, columns)
 
 
 
-def save_profile(height_cm, bodyweight_kg, bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score):
-    base_level = calculate_starting_level(bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score)
+
+def save_profile(height_cm, bodyweight_kg, bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score, goal="", current_phase="", focus_areas="", onboarding_complete=True):
+    base_level = calculate_starting_level(
+        safe_num(bench_e1rm, 0),
+        safe_num(squat_e1rm, 0),
+        safe_num(training_years, 0),
+        safe_num(physique_score, 0),
+        safe_num(leanness_score, 0),
+    )
     row = {
-        "height_cm": height_cm,
-        "bodyweight_kg": bodyweight_kg,
-        "bench_e1rm": bench_e1rm,
-        "squat_e1rm": squat_e1rm,
-        "training_years": training_years,
-        "physique_score": physique_score,
-        "leanness_score": leanness_score,
-        "base_level": base_level,
+        "height_cm": float(height_cm or 0),
+        "bodyweight_kg": float(bodyweight_kg or 0),
+        "bench_e1rm": float(bench_e1rm or 0),
+        "squat_e1rm": float(squat_e1rm or 0),
+        "training_years": float(training_years or 0),
+        "physique_score": float(physique_score or 0),
+        "leanness_score": float(leanness_score or 0),
+        "base_level": int(base_level),
+        "goal": str(goal or ""),
+        "current_phase": str(current_phase or ""),
+        "focus_areas": str(focus_areas or ""),
+        "onboarding_complete": bool(onboarding_complete),
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
     ok, err = sb_insert("profile", row)
     store_supabase_result("profile", ok, err)
     pd.DataFrame([row]).to_csv(PROFILE_FILE, index=False)
+    clear_data_cache()
     return base_level
+
 
 
 
@@ -3150,6 +3167,161 @@ Return ONLY valid JSON:
         return None, f"AI custom plan failed: {e}"
 
 
+
+# ============================================================
+# ONBOARDING / PROFILE CALIBRATION
+# ============================================================
+
+def profile_is_complete():
+    profile = load_profile()
+    if profile.empty:
+        return False
+
+    latest = profile.iloc[-1]
+
+    # New profile format
+    if "onboarding_complete" in latest:
+        val = latest.get("onboarding_complete", False)
+        if str(val).lower() in ["true", "1", "yes", "complete"]:
+            return True
+
+    # Backward compatibility: old profile counts as complete if it has a useful base level or stats.
+    try:
+        if float(latest.get("base_level", 0)) > 1:
+            return True
+    except Exception:
+        pass
+
+    try:
+        if float(latest.get("height_cm", 0)) > 0 and float(latest.get("bodyweight_kg", 0)) > 0:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def should_show_onboarding():
+    if st.session_state.get("force_onboarding", False):
+        return True
+    return not profile_is_complete()
+
+
+def detect_onboarding_defaults():
+    summary = workout_summary(load_log())
+    latest_bw = latest_bodyweight_value()
+    latest_bf = latest_bodyfat_mid()
+
+    bench = current_exercise_best_1rm("Barbell Bench Press (Strength)")
+    if bench <= 0:
+        bench = max(
+            current_exercise_best_1rm("Barbell Bench Press"),
+            current_exercise_best_1rm("Paused Barbell Bench Press"),
+        )
+
+    squat = current_exercise_best_1rm("Barbell Back Squat")
+
+    physique = latest_physique_rating_values() if "latest_physique_rating_values" in globals() else {}
+
+    profile = load_profile()
+    latest_profile = profile.iloc[-1].to_dict() if not profile.empty else {}
+
+    return {
+        "height_cm": safe_num(latest_profile.get("height_cm", 183.5), 183.5),
+        "bodyweight_kg": safe_num(latest_profile.get("bodyweight_kg", latest_bw or summary.get("latest_bw", 77.0)), latest_bw or 77.0),
+        "bench_e1rm": safe_num(latest_profile.get("bench_e1rm", bench), bench),
+        "squat_e1rm": safe_num(latest_profile.get("squat_e1rm", squat), squat),
+        "training_years": safe_num(latest_profile.get("training_years", 3), 3),
+        "physique_score": safe_num(latest_profile.get("physique_score", physique.get("physique_score", 9)), 9),
+        "leanness_score": safe_num(latest_profile.get("leanness_score", physique.get("leanness_score", 8)), 8),
+        "bodyfat": latest_bf,
+        "goal": str(latest_profile.get("goal", "Get leaner while maintaining strength") or "Get leaner while maintaining strength"),
+        "current_phase": str(latest_profile.get("current_phase", "Cut") or "Cut"),
+        "focus_areas": str(latest_profile.get("focus_areas", "Upper chest, side delts, lat width, abs") or "Upper chest, side delts, lat width, abs"),
+    }
+
+
+def render_onboarding_screen():
+    defaults = detect_onboarding_defaults()
+
+    st.markdown("""
+    <div class="onboarding-shell">
+        <div class="onboarding-badge">PROFILE CALIBRATION</div>
+        <div class="onboarding-title">Set up Tyson Training</div>
+        <div class="onboarding-subtitle">
+            Existing workout, bodyweight, body fat and PR data has been detected and pre-filled.
+            Confirm it once so levels, avatar stats and AI coaching are calibrated properly.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    detected = {
+        "Detected bodyweight": f"{defaults['bodyweight_kg']:.1f}kg",
+        "Detected bench e1RM": f"{defaults['bench_e1rm']:.1f}kg",
+        "Detected squat e1RM": f"{defaults['squat_e1rm']:.1f}kg",
+        "Detected body fat": f"{defaults['bodyfat']:.1f}%" if defaults["bodyfat"] else "No body fat log yet",
+    }
+
+    cols = st.columns(4)
+    for i, (label, value) in enumerate(detected.items()):
+        with cols[i]:
+            compact_metric(label, value, "from existing data")
+
+    st.divider()
+
+    with st.form("onboarding_profile_form"):
+        st.subheader("Confirm your profile")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            height_cm = st.number_input("Height (cm)", min_value=120.0, max_value=230.0, value=float(defaults["height_cm"]), step=0.5)
+            bodyweight_kg = st.number_input("Current bodyweight (kg)", min_value=35.0, max_value=180.0, value=float(defaults["bodyweight_kg"]), step=0.1)
+            bench_e1rm = st.number_input("Bench estimated 1RM (kg)", min_value=0.0, max_value=300.0, value=float(defaults["bench_e1rm"]), step=2.5)
+            squat_e1rm = st.number_input("Squat estimated 1RM (kg)", min_value=0.0, max_value=400.0, value=float(defaults["squat_e1rm"]), step=2.5)
+
+        with c2:
+            training_years = st.number_input("Training age (years)", min_value=0.0, max_value=20.0, value=float(defaults["training_years"]), step=0.5)
+            physique_score = st.slider("Current physique score /15", 1, 15, int(max(1, min(defaults["physique_score"], 15))))
+            leanness_score = st.slider("Current leanness score /15", 1, 15, int(max(1, min(defaults["leanness_score"], 15))))
+            current_phase = st.selectbox(
+                "Current phase",
+                ["Cut", "Maintain", "Lean Bulk", "Bulk", "Recomp"],
+                index=["Cut", "Maintain", "Lean Bulk", "Bulk", "Recomp"].index(defaults["current_phase"]) if defaults["current_phase"] in ["Cut", "Maintain", "Lean Bulk", "Bulk", "Recomp"] else 0,
+            )
+
+        goal = st.text_input("Main goal", value=defaults["goal"])
+        focus_areas = st.text_input("Focus areas", value=defaults["focus_areas"])
+
+        submitted = st.form_submit_button("Save Profile & Enter App", type="primary", use_container_width=True)
+
+    if submitted:
+        level = save_profile(
+            height_cm=height_cm,
+            bodyweight_kg=bodyweight_kg,
+            bench_e1rm=bench_e1rm,
+            squat_e1rm=squat_e1rm,
+            training_years=training_years,
+            physique_score=physique_score,
+            leanness_score=leanness_score,
+            goal=goal,
+            current_phase=current_phase,
+            focus_areas=focus_areas,
+            onboarding_complete=True,
+        )
+        st.session_state.force_onboarding = False
+        st.session_state.just_saved_message = f"PROFILE CALIBRATED — LEVEL {level}"
+        clear_data_cache()
+        st.rerun()
+
+    with st.expander("Already set up?"):
+        st.write("You can skip this if your profile is already correct. Your existing workout data will not be deleted.")
+        if st.button("Skip for now", use_container_width=True):
+            st.session_state.force_onboarding = False
+            st.session_state.just_saved_message = "ONBOARDING SKIPPED"
+            st.rerun()
+
+
+
 # ============================================================
 # UI HELPERS
 # ============================================================
@@ -3594,7 +3766,7 @@ st.markdown("""
 # ============================================================
 
 PRIMARY_PAGES = ["Home", "Today", "Avatar", "Progress", "Physique", "Cardio", "Goals", "Data Manager"]
-MORE_PAGES = ["Profile", "Measurements", "Achievements", "Body Fat", "Bodyweight", "Routine", "Delete Data"]
+MORE_PAGES = ["Profile", "Onboarding", "Measurements", "Achievements", "Body Fat", "Bodyweight", "Routine", "Delete Data"]
 ALL_PAGES = PRIMARY_PAGES + MORE_PAGES
 
 if "active_page" not in st.session_state:
@@ -3693,6 +3865,12 @@ if PERFORMANCE_MODE:
 
 ui_toast_area()
 
+# Show onboarding once if profile is missing, or when manually re-running it.
+if should_show_onboarding() and page != "Data Manager":
+    render_onboarding_screen()
+    st.stop()
+
+
 df = load_log()
 
 # Unlock any achievements already earned from existing data/profile.
@@ -3790,6 +3968,10 @@ if page == "Home":
 
 
 elif page == "Profile":
+    if st.button("Re-run Onboarding / Recalibrate Profile", type="secondary"):
+        st.session_state.force_onboarding = True
+        st.rerun()
+
     page_hero("Athlete Profile", "Set your baseline stats so levels reflect your current physique.", "Profile")
     st.info("Set your starting level from your current real-world stats, so you don't start at Level 1.")
 
@@ -3827,6 +4009,12 @@ elif page == "Profile":
     st.write("☀️ Level 100: True Adam")
 
 
+
+
+elif page == "Onboarding":
+    page_hero("Profile Onboarding", "Re-run profile calibration without deleting any existing data.", "Calibration")
+    st.session_state.force_onboarding = True
+    render_onboarding_screen()
 
 
 elif page == "Measurements":
@@ -5503,6 +5691,59 @@ div[data-testid="stMetric"] {
         transition-duration: .001s !important;
     }
 }
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   ONBOARDING PROFILE CALIBRATION UI
+============================================================ */
+
+.onboarding-shell {
+    position: relative;
+    overflow: hidden;
+    padding: 30px;
+    border-radius: 34px;
+    margin: 18px 0 24px 0;
+    background:
+        radial-gradient(circle at 16% 20%, rgba(125,211,252,.26), transparent 34%),
+        linear-gradient(145deg, rgba(15,39,68,.82), rgba(2,6,23,.88));
+    border: 1px solid rgba(56,189,248,.22);
+    box-shadow:
+        0 22px 58px rgba(0,0,0,.32),
+        0 0 44px rgba(56,189,248,.20),
+        inset 0 0 30px rgba(56,189,248,.06);
+}
+
+.onboarding-badge {
+    display:inline-flex;
+    padding:8px 12px;
+    border-radius:999px;
+    color:#02131f;
+    font-weight:950;
+    background:linear-gradient(90deg, #7dd3fc, #38bdf8);
+    box-shadow:0 0 24px rgba(56,189,248,.26);
+    margin-bottom:16px;
+}
+
+.onboarding-title {
+    color:#eaf7ff;
+    font-size:2.4rem;
+    line-height:1.0;
+    font-weight:1000;
+    letter-spacing:-.06em;
+    text-shadow:0 0 26px rgba(56,189,248,.34);
+}
+
+.onboarding-subtitle {
+    color:#8fb8d6;
+    margin-top:10px;
+    max-width:760px;
+    font-size:1.02rem;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
