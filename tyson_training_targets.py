@@ -12,6 +12,9 @@ LOG_FILE = Path("workout_log.csv")
 BODYWEIGHT_FILE = Path("bodyweight_log.csv")
 CARDIO_FILE = Path("cardio_log.csv")
 BODYFAT_FILE = Path("bodyfat_log.csv")
+MEASUREMENTS_FILE = Path("measurements.csv")
+PHYSIQUE_RATING_FILE = Path("physique_ratings.csv")
+CUSTOM_PLAN_FILE = Path("custom_workout_plan.csv")
 TARGETS_FILE = Path("targets.csv")
 PROFILE_FILE = Path("profile.csv")
 ACHIEVEMENT_FILE = Path("achievements.csv")
@@ -345,6 +348,26 @@ def load_targets():
     )
 
 
+
+
+def save_or_update_target(target_type, name, target_value, unit, notes=""):
+    df = load_targets()
+    if not df.empty:
+        df["target_type"] = df["target_type"].astype(str)
+        df["name"] = df["name"].astype(str)
+        mask = (df["target_type"] == str(target_type)) & (df["name"] == str(name))
+        df = df.loc[~mask].copy()
+
+    new_row = {
+        "target_type": target_type,
+        "name": name,
+        "target_value": float(target_value),
+        "unit": unit,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "notes": notes,
+    }
+    pd.concat([df, pd.DataFrame([new_row])], ignore_index=True).to_csv(TARGETS_FILE, index=False)
+
 def get_target(target_type, name):
     df = load_targets()
     if df.empty:
@@ -622,6 +645,221 @@ def get_bodyweight_stats():
 
 
 
+
+def load_measurements():
+    return load_csv(
+        MEASUREMENTS_FILE,
+        [
+            "date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm",
+            "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm",
+            "shoulders_cm", "neck_cm", "notes", "timestamp"
+        ]
+    )
+
+
+def save_measurements(row):
+    df = load_measurements()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(MEASUREMENTS_FILE, index=False)
+
+
+def latest_measurements():
+    df = load_measurements()
+    if df.empty:
+        return {}
+    return df.iloc[-1].to_dict()
+
+
+def load_physique_ratings():
+    return load_csv(
+        PHYSIQUE_RATING_FILE,
+        [
+            "date", "physique_score", "leanness_score", "symmetry_score",
+            "muscularity_score", "confidence", "weak_points", "improvements",
+            "summary", "timestamp"
+        ]
+    )
+
+
+def save_physique_rating(row):
+    df = load_physique_ratings()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(PHYSIQUE_RATING_FILE, index=False)
+
+
+def encode_uploaded_image(uploaded_file):
+    data = uploaded_file.getvalue()
+    mime = uploaded_file.type or "image/jpeg"
+    encoded = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime};base64,{encoded}"
+
+
+def run_ai_physique_rating(front_photo, side_photo, back_photo, stats, model_name):
+    try:
+        from openai import OpenAI
+    except Exception as e:
+        return None, f"OpenAI package not installed. Add 'openai' to requirements.txt. Error: {e}"
+
+    api_key = None
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+    except Exception:
+        api_key = None
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        return None, "Missing OPENAI_API_KEY. Add it to Streamlit Cloud secrets."
+
+    if front_photo is None and side_photo is None and back_photo is None:
+        return None, "Upload at least one physique photo."
+
+    client = OpenAI(api_key=api_key)
+
+    user_text = f"""
+You are a physique coach rating a male physique for a fitness app.
+
+Do not identify the person. This is not medical advice.
+Give practical bodybuilding/aesthetic feedback.
+
+Known stats/measurements:
+{json.dumps(stats, indent=2)}
+
+Return ONLY valid JSON with this exact schema:
+{{
+  "physique_score": number,
+  "leanness_score": number,
+  "symmetry_score": number,
+  "muscularity_score": number,
+  "confidence": "low" | "medium" | "high",
+  "weak_points": ["short point", "short point", "short point"],
+  "improvements": ["short actionable improvement", "short actionable improvement", "short actionable improvement"],
+  "summary": "short honest summary",
+  "training_priority": ["Chest", "Side delts", "Back width", "Arms", "Legs", "Abs"]
+}}
+
+Scoring:
+- physique_score out of 15 = overall aesthetic development
+- leanness_score out of 15 = leanness/definition
+- symmetry_score out of 15 = balance/proportions
+- muscularity_score out of 15 = muscle size/fullness
+Be realistic and useful, not flattering.
+"""
+
+    content = [{"type": "input_text", "text": user_text}]
+
+    if front_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(front_photo)})
+    if side_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(side_photo)})
+    if back_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(back_photo)})
+
+    try:
+        response = client.responses.create(
+            model=model_name,
+            input=[{"role": "user", "content": content}],
+        )
+        text = getattr(response, "output_text", None) or str(response)
+        text_clean = text.strip().replace("```json", "").replace("```", "").strip()
+        data = json.loads(text_clean)
+
+        required = ["physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary"]
+        for key in required:
+            if key not in data:
+                return None, f"AI response missing key: {key}. Raw response: {text[:500]}"
+
+        return data, None
+
+    except Exception as e:
+        return None, f"AI physique rating failed: {e}"
+
+
+def generate_custom_plan_from_data(weak_points=None, priorities=None, goal="Aesthetic / lean bulk"):
+    weak_points = weak_points or []
+    priorities = priorities or []
+
+    priority_text = " ".join([str(x).lower() for x in weak_points + priorities])
+
+    extra_side_delts = "delt" in priority_text or "shoulder" in priority_text or "width" in priority_text
+    extra_chest = "chest" in priority_text or "pec" in priority_text
+    extra_back = "back" in priority_text or "lat" in priority_text or "v-taper" in priority_text
+    extra_arms = "arm" in priority_text or "bicep" in priority_text or "tricep" in priority_text
+    extra_legs = "leg" in priority_text or "quad" in priority_text or "hamstring" in priority_text
+
+    plan = {
+        "Push 1 - Strength": [
+            ("Barbell Bench Press (Strength)", 4, "Top set 3-5 + 3 back-off sets 5-8"),
+            ("Dumbbell Flat Bench Press", 3 + int(extra_chest), "8-12"),
+            ("Pec Deck Machine Fly", 3 + int(extra_chest), "10-15"),
+            ("Cable Lateral Raise", 4 + int(extra_side_delts), "12-20"),
+            ("Cable Triceps Pushdown", 4, "10-15"),
+            ("Decline Push-Up", 2, "AMRAP"),
+        ],
+        "Pull 1 - Back Thickness": [
+            ("Chest-Supported Machine Row", 4, "6-10"),
+            ("Lat Pulldown", 4 + int(extra_back), "8-12"),
+            ("Chest-Supported Dumbbell Row", 3, "8-12"),
+            ("Reverse Pec Deck (Rear Delt Fly)", 4 + int(extra_side_delts), "15-25"),
+            ("EZ-Bar Curl", 4 + int(extra_arms), "8-12"),
+            ("Dumbbell Biceps Curl", 3, "10-15"),
+        ],
+        "Push 2 - Hypertrophy": [
+            ("Paused Barbell Bench Press", 3, "5-8"),
+            ("Dumbbell Flat Bench Press", 3 + int(extra_chest), "8-12"),
+            ("Pec Deck Machine Fly", 4, "12-20"),
+            ("Dumbbell Lateral Raise", 5 + int(extra_side_delts), "15-25"),
+            ("Cable Lateral Raise", 3, "15-25"),
+            ("Cable Triceps Pushdown", 4 + int(extra_arms), "12-20"),
+        ],
+        "Pull 2 - Width / V-Taper": [
+            ("Lat Pulldown", 4 + int(extra_back), "10-15"),
+            ("Cable Lat Pullover (Straight-Arm Pulldown)", 4 + int(extra_back), "12-20"),
+            ("Chest-Supported Machine Row", 3, "8-12"),
+            ("Face Pull", 3, "15-25"),
+            ("Reverse Pec Deck (Rear Delt Fly)", 3, "15-25"),
+            ("EZ-Bar Curl", 3 + int(extra_arms), "10-15"),
+        ],
+        "Legs": [
+            ("Barbell Back Squat", 3, "5-8"),
+            ("Hack Squat Machine", 4 + int(extra_legs), "8-12"),
+            ("Seated/Lying Leg Curl", 4, "10-15"),
+            ("Leg Extension", 4 + int(extra_legs), "12-20"),
+            ("Seated Calf Raise", 5, "10-20"),
+            ("Hip Adduction Machine", 3, "12-20"),
+        ],
+        "Aesthetics": [
+            ("Cable Lateral Raise", 5 + int(extra_side_delts), "15-25"),
+            ("Cable Lat Pullover (Straight-Arm Pulldown)", 3 + int(extra_back), "12-20"),
+            ("Pec Deck Machine Fly", 4 + int(extra_chest), "12-20"),
+            ("Reverse Pec Deck (Rear Delt Fly)", 4, "15-25"),
+            ("Dumbbell Biceps Curl", 3 + int(extra_arms), "10-15"),
+            ("Cable Triceps Pushdown", 3 + int(extra_arms), "10-15"),
+            ("Machine Ab Crunch", 3, "10-20"),
+            ("Lying Leg Raise", 3, "12-20"),
+            ("Weighted Sit-Up", 2, "10-15"),
+        ],
+    }
+
+    return plan
+
+
+def save_custom_plan(plan):
+    rows = []
+    for workout, exercises in plan.items():
+        for exercise, sets, reps in exercises:
+            rows.append({
+                "workout": workout,
+                "exercise": exercise,
+                "sets": sets,
+                "reps": reps,
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+    pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
+
+
+def load_custom_plan():
+    return load_csv(CUSTOM_PLAN_FILE, ["workout", "exercise", "sets", "reps", "timestamp"])
+
+
+
 def save_bodyfat_estimate(row):
     """
     Saves one body fat estimate row to bodyfat_log.csv.
@@ -759,6 +997,20 @@ JSON schema:
         return None, f"AI estimate failed: {e}"
 
 
+
+
+
+def navy_body_fat_male(height_cm, waist_cm, neck_cm):
+    """US Navy male body fat estimate. Uses inches internally. Returns None for invalid inputs."""
+    try:
+        height_in = float(height_cm) / 2.54
+        waist_in = float(waist_cm) / 2.54
+        neck_in = float(neck_cm) / 2.54
+        if height_in <= 0 or neck_in <= 0 or waist_in <= neck_in:
+            return None
+        return 86.010 * math.log10(waist_in - neck_in) - 70.041 * math.log10(height_in) + 36.76
+    except Exception:
+        return None
 
 def load_bodyfat_log():
     return load_csv(
@@ -1005,12 +1257,12 @@ st.markdown("""
 <div class="nw-hero">
     <div class="nw-hero-title">⚡ Training Tracker</div>
     <div class="nw-hero-sub">PPPPLA Split</div>
-    <span class="nw-badge">Push • Pull • Legs • Aesthetics • Recovery</span>
+    <span class="nw-badge"Push • Pull • Legs • Aesthetics • Recovery</span>
     <div class="nw-scanline"></div>
 </div>
 """, unsafe_allow_html=True)
 
-page = st.sidebar.radio("Menu", ["Home", "Profile", "Today", "Cardio", "Progress", "Goals", "Achievements", "Body Fat", "Bodyweight", "Delete Data", "Routine"])
+page = st.sidebar.radio("Menu", ["Home", "Profile", "Physique", "Measurements", "Today", "Cardio", "Progress", "Goals", "Achievements", "Body Fat", "Bodyweight", "Delete Data", "Routine"])
 st.markdown(f'<div class="page-transition">⚡ {page} module loaded</div>', unsafe_allow_html=True)
 
 for key in ["just_saved_message", "pr_message", "achievement_message"]:
@@ -1147,6 +1399,165 @@ elif page == "Profile":
     st.write("🗿 Level 75-89: Chad-Lite")
     st.write("👑 Level 90-99: Chad")
     st.write("☀️ Level 100: True Adam")
+
+
+
+
+elif page == "Measurements":
+    st.header("Body Measurements")
+    st.info("Log measurements to track proportions and help the app generate better physique-focused training plans.")
+
+    latest = latest_measurements()
+    latest_bw = latest_bodyweight_value() or float(latest.get("bodyweight", 76.0) or 76.0)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        m_date = st.date_input("Date", value=date.today(), key="measure_date")
+        bodyweight = st.number_input("Bodyweight kg", min_value=0.0, step=0.1, value=float(latest_bw or 76.0))
+        wrist = st.number_input("Wrist cm", min_value=0.0, step=0.1, value=float(latest.get("wrist_cm", 0) or 0))
+        forearm = st.number_input("Forearm cm", min_value=0.0, step=0.1, value=float(latest.get("forearm_cm", 0) or 0))
+        bicep = st.number_input("Bicep cm", min_value=0.0, step=0.1, value=float(latest.get("bicep_cm", 0) or 0))
+        chest = st.number_input("Chest cm", min_value=0.0, step=0.1, value=float(latest.get("chest_cm", 0) or 0))
+    with c2:
+        waist = st.number_input("Waist cm", min_value=0.0, step=0.1, value=float(latest.get("waist_cm", 0) or 0))
+        hips = st.number_input("Hips cm", min_value=0.0, step=0.1, value=float(latest.get("hips_cm", 0) or 0))
+        thigh = st.number_input("Thigh cm", min_value=0.0, step=0.1, value=float(latest.get("thigh_cm", 0) or 0))
+        calf = st.number_input("Calf cm", min_value=0.0, step=0.1, value=float(latest.get("calf_cm", 0) or 0))
+        shoulders = st.number_input("Shoulders cm", min_value=0.0, step=0.1, value=float(latest.get("shoulders_cm", 0) or 0))
+        neck = st.number_input("Neck cm", min_value=0.0, step=0.1, value=float(latest.get("neck_cm", 0) or 0))
+
+    notes = st.text_input("Notes", placeholder="Morning, no pump, relaxed, etc.")
+
+    if st.button("Save Measurements", type="primary"):
+        save_measurements({
+            "date": str(m_date),
+            "bodyweight": bodyweight,
+            "wrist_cm": wrist,
+            "forearm_cm": forearm,
+            "bicep_cm": bicep,
+            "chest_cm": chest,
+            "waist_cm": waist,
+            "hips_cm": hips,
+            "thigh_cm": thigh,
+            "calf_cm": calf,
+            "shoulders_cm": shoulders,
+            "neck_cm": neck,
+            "notes": notes,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        })
+        st.session_state.just_saved_message = "MEASUREMENTS SAVED"
+        st.rerun()
+
+    st.subheader("Measurement History")
+    mlog = load_measurements()
+    if mlog.empty:
+        st.info("No measurements logged yet.")
+    else:
+        st.dataframe(mlog.sort_values("date", ascending=False), use_container_width=True)
+        chart_cols = [c for c in ["bodyweight", "bicep_cm", "chest_cm", "waist_cm", "shoulders_cm"] if c in mlog.columns]
+        if chart_cols:
+            for col in chart_cols:
+                mlog[col] = pd.to_numeric(mlog[col], errors="coerce").fillna(0)
+            st.line_chart(mlog, x="date", y=chart_cols)
+
+
+elif page == "Physique":
+    st.header("AI Physique Rating")
+    st.info("Upload physique photos to get a physique score, leanness score, weak points, and a custom workout plan suggestion.")
+
+    latest_m = latest_measurements()
+    latest_bf = latest_bodyfat_mid()
+    latest_bw = latest_bodyweight_value()
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        front_photo = st.file_uploader("Front photo", type=["jpg", "jpeg", "png", "webp"], key="phys_front")
+    with c2:
+        side_photo = st.file_uploader("Side photo", type=["jpg", "jpeg", "png", "webp"], key="phys_side")
+    with c3:
+        back_photo = st.file_uploader("Back photo", type=["jpg", "jpeg", "png", "webp"], key="phys_back")
+
+    model_name = st.text_input("OpenAI model", value="gpt-5.1", key="phys_model")
+
+    stats = {
+        "bodyweight_kg": latest_bw,
+        "bodyfat_estimate": latest_bf,
+        "measurements": latest_m,
+        "bench_e1rm": current_exercise_best_1rm("Barbell Bench Press (Strength)"),
+        "squat_e1rm": current_exercise_best_1rm("Barbell Back Squat"),
+    }
+
+    if st.button("Run AI Physique Rating", type="primary"):
+        with st.spinner("Rating physique and analysing weak points..."):
+            result, err = run_ai_physique_rating(front_photo, side_photo, back_photo, stats, model_name)
+        if err:
+            st.error(err)
+        else:
+            st.session_state["last_physique_rating"] = result
+            st.session_state.just_saved_message = "PHYSIQUE RATING COMPLETE"
+            st.rerun()
+
+    rating = st.session_state.get("last_physique_rating", None)
+
+    if rating:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Physique", f"{float(rating['physique_score']):.1f}/15")
+        c2.metric("Leanness", f"{float(rating['leanness_score']):.1f}/15")
+        c3.metric("Symmetry", f"{float(rating['symmetry_score']):.1f}/15")
+        c4.metric("Muscularity", f"{float(rating['muscularity_score']):.1f}/15")
+
+        st.write(f"**Confidence:** {str(rating.get('confidence', 'unknown')).title()}")
+        st.write(f"**Summary:** {rating.get('summary', '')}")
+
+        st.subheader("Weak Points")
+        for point in rating.get("weak_points", []):
+            st.write(f"- {point}")
+
+        st.subheader("What To Improve")
+        for point in rating.get("improvements", []):
+            st.write(f"- {point}")
+
+        if st.button("Save Physique Rating", type="primary"):
+            save_physique_rating({
+                "date": str(date.today()),
+                "physique_score": rating.get("physique_score"),
+                "leanness_score": rating.get("leanness_score"),
+                "symmetry_score": rating.get("symmetry_score"),
+                "muscularity_score": rating.get("muscularity_score"),
+                "confidence": rating.get("confidence"),
+                "weak_points": json.dumps(rating.get("weak_points", [])),
+                "improvements": json.dumps(rating.get("improvements", [])),
+                "summary": rating.get("summary"),
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+            st.session_state.just_saved_message = "PHYSIQUE RATING SAVED"
+            st.rerun()
+
+        st.subheader("Generate Custom Workout Plan")
+        goal = st.selectbox("Goal", ["Aesthetic / lean bulk", "Cutting / maintain muscle", "Bench strength focus", "V-taper focus"])
+        if st.button("Generate Plan From Physique Analysis", type="primary"):
+            plan = generate_custom_plan_from_data(
+                weak_points=rating.get("weak_points", []),
+                priorities=rating.get("training_priority", []),
+                goal=goal,
+            )
+            save_custom_plan(plan)
+            st.session_state.just_saved_message = "CUSTOM WORKOUT PLAN GENERATED"
+            st.rerun()
+
+    st.subheader("Saved Physique Ratings")
+    ratings = load_physique_ratings()
+    if ratings.empty:
+        st.info("No physique ratings saved yet.")
+    else:
+        st.dataframe(ratings.sort_values("date", ascending=False), use_container_width=True)
+
+    st.subheader("Current Custom Workout Plan")
+    plan_df = load_custom_plan()
+    if plan_df.empty:
+        st.info("No custom plan generated yet.")
+    else:
+        st.dataframe(plan_df, use_container_width=True)
 
 
 
@@ -1606,7 +2017,7 @@ elif page == "Bodyweight":
 elif page == "Delete Data":
     st.header("Delete Logged Data")
     st.warning("Use this to remove accidental entries. This permanently edits the CSV file.")
-    log_type = st.selectbox("Choose log", ["Workout", "Cardio", "Body Fat", "Bodyweight", "Targets", "Profile", "Achievements"])
+    log_type = st.selectbox("Choose log", ["Workout", "Cardio", "Body Fat", "Bodyweight", "Measurements", "Physique Ratings", "Custom Plan", "Targets", "Profile", "Achievements"])
     if log_type == "Workout":
         path, columns = LOG_FILE, ["date", "workout", "exercise", "set", "weight", "reps", "timestamp"]
     elif log_type == "Cardio":
@@ -1615,6 +2026,12 @@ elif page == "Delete Data":
         path, columns = BODYFAT_FILE, ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"]
     elif log_type == "Bodyweight":
         path, columns = BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"]
+    elif log_type == "Measurements":
+        path, columns = MEASUREMENTS_FILE, ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"]
+    elif log_type == "Physique Ratings":
+        path, columns = PHYSIQUE_RATING_FILE, ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"]
+    elif log_type == "Custom Plan":
+        path, columns = CUSTOM_PLAN_FILE, ["workout", "exercise", "sets", "reps", "timestamp"]
     elif log_type == "Targets":
         path, columns = TARGETS_FILE, ["target_type", "name", "target_value", "unit", "created_at", "notes"]
     elif log_type == "Profile":
