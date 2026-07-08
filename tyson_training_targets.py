@@ -3272,7 +3272,7 @@ st.markdown("""
 nav_cols = st.columns([1,1,1,1,1,1,1])
 nav_labels = {
     "Home": "🏠 Home",
-    "Today": "🏋️ Today",
+    "Today": "🏋️ Workout",
     "Progress": "📈 Progress",
     "Physique": "🤖 AI",
     "Cardio": "🫀 Cardio",
