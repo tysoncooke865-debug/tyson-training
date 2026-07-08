@@ -3010,12 +3010,11 @@ textarea:focus {
 """, unsafe_allow_html=True)
 
 
-
 st.markdown("""
 <style>
 /* ============================================================
-   ABSOLUTE RED THEME FINAL OVERRIDE
-   This block intentionally loads last.
+   FULL RED AESTHETIC OVERRIDE — LOADED LAST
+   Forces every remaining Streamlit default red/black.
 ============================================================ */
 
 :root {
@@ -3025,94 +3024,172 @@ st.markdown("""
     --text-color: #ffe0e0 !important;
 }
 
-/* Whole app + every major Streamlit container */
-html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], .main, section.main {
-    background:
-        radial-gradient(circle at 12% 12%, rgba(255, 0, 0, 0.34), transparent 26%),
-        radial-gradient(circle at 88% 22%, rgba(176, 0, 32, 0.30), transparent 30%),
-        radial-gradient(circle at 48% 90%, rgba(139, 0, 0, 0.34), transparent 35%),
-        linear-gradient(135deg, #050000 0%, #160000 48%, #050000 100%) !important;
-    background-size: 180% 180% !important;
-    animation: redBackgroundShift 12s ease infinite !important;
+* {
+    accent-color: #ff2b2b !important;
 }
 
-@keyframes redBackgroundShift {
+/* Every page background */
+html,
+body,
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+[data-testid="stMainBlockContainer"],
+[data-testid="stVerticalBlock"],
+[data-testid="stHorizontalBlock"],
+.main,
+.block-container,
+section.main {
+    background:
+        radial-gradient(circle at 12% 12%, rgba(255,0,0,0.36), transparent 26%),
+        radial-gradient(circle at 88% 22%, rgba(176,0,32,0.34), transparent 30%),
+        radial-gradient(circle at 50% 90%, rgba(139,0,0,0.32), transparent 38%),
+        linear-gradient(135deg, #050000 0%, #160000 50%, #050000 100%) !important;
+    background-size: 180% 180% !important;
+    animation: redShift 12s ease infinite !important;
+}
+
+@keyframes redShift {
     0% { background-position: 0% 30%; }
     50% { background-position: 100% 70%; }
     100% { background-position: 0% 30%; }
 }
 
-/* Header / hero card */
-.nw-hero,
-[class*="hero"],
-.redline-hero {
-    background:
-        linear-gradient(135deg, rgba(38,0,0,0.98) 0%, rgba(80,0,0,0.98) 55%, rgba(18,0,0,0.98) 100%) !important;
-    border: 1px solid rgba(255, 51, 51, 0.75) !important;
-    box-shadow:
-        0 0 28px rgba(255, 0, 0, 0.46),
-        inset 0 0 22px rgba(255, 0, 0, 0.18) !important;
+/* Sidebar */
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] *,
+[data-testid="stSidebarContent"] {
+    background-color: #100000 !important;
+    border-color: rgba(255,51,51,0.45) !important;
 }
 
+section[data-testid="stSidebar"] {
+    background:
+        linear-gradient(180deg, #300000 0%, #130000 55%, #050000 100%) !important;
+}
+
+/* Header/hero and all cards */
+.nw-hero,
+.redline-hero,
+[class*="hero"],
+.mission-card,
+.nw-exercise-card,
+.dashboard-card,
+div[data-testid="stMetric"],
+div[data-testid="stExpander"],
+details,
+[data-testid="stAlert"],
+[data-testid="stFileUploader"],
+[data-testid="stDataFrame"],
+[data-testid="stTable"],
+.stDataFrame,
+.stTable,
+[data-baseweb="notification"],
+[data-baseweb="popover"],
+[data-baseweb="menu"],
+[data-baseweb="select"] > div,
+[data-baseweb="input"] > div,
+[data-baseweb="textarea"] > div {
+    background:
+        linear-gradient(145deg, rgba(60,0,0,0.98), rgba(15,0,0,0.98)) !important;
+    background-color: #160000 !important;
+    border: 1px solid rgba(255,51,51,0.72) !important;
+    box-shadow:
+        0 0 22px rgba(255,0,0,0.34),
+        inset 0 0 16px rgba(255,0,0,0.16) !important;
+}
+
+/* Hero text and app text */
 .nw-hero-title,
 .nw-hero-sub,
 .nw-card-title,
 .nw-small,
 .mission-title,
-.progress-label {
+.progress-label,
+h1, h2, h3, h4, h5, h6,
+p, span, label,
+[data-testid="stMarkdown"],
+[data-testid="stCaptionContainer"] {
     color: #ffe0e0 !important;
-    text-shadow: 0 0 10px rgba(255, 51, 51, 0.75) !important;
+    text-shadow: 0 0 8px rgba(255,51,51,0.55) !important;
 }
 
+/* Badge + scanline */
 .nw-badge {
     color: #ffe0e0 !important;
-    background: rgba(255, 0, 0, 0.22) !important;
-    border: 1px solid rgba(255, 51, 51, 0.75) !important;
-    box-shadow: 0 0 16px rgba(255, 0, 0, 0.45) !important;
+    background: rgba(255,0,0,0.24) !important;
+    border: 1px solid rgba(255,80,80,0.82) !important;
+    box-shadow: 0 0 18px rgba(255,0,0,0.50) !important;
 }
 
 .nw-scanline {
-    background: linear-gradient(90deg, transparent, #b00020, #ff3333, #ffb3b3, #ff3333, transparent) !important;
-    box-shadow: 0 0 18px rgba(255, 51, 51, 0.90) !important;
-}
-
-/* Sidebar */
-section[data-testid="stSidebar"],
-section[data-testid="stSidebar"] > div {
-    background:
-        linear-gradient(180deg, #260000 0%, #100000 50%, #050000 100%) !important;
-}
-
-/* Cards / metrics / expanders */
-div[data-testid="stMetric"],
-.mission-card,
-.nw-exercise-card,
-.dashboard-card,
-div[data-testid="stExpander"],
-details {
-    background:
-        linear-gradient(145deg, rgba(60,0,0,0.96), rgba(15,0,0,0.96)) !important;
-    border: 1px solid rgba(255, 51, 51, 0.70) !important;
-    box-shadow:
-        0 0 22px rgba(255, 0, 0, 0.32),
-        inset 0 0 16px rgba(255, 0, 0, 0.14) !important;
+    background: linear-gradient(90deg, transparent, #8b0000, #ff3333, #ffb3b3, #ff3333, transparent) !important;
+    box-shadow: 0 0 20px rgba(255,51,51,0.95) !important;
 }
 
 /* Buttons */
 .stButton button,
+button,
 button[kind="primary"],
-button[kind="secondary"],
-button {
+button[kind="secondary"] {
     background: linear-gradient(90deg, #8b0000, #d90429, #ff3333) !important;
-    color: white !important;
-    border: 1px solid rgba(255, 102, 102, 0.7) !important;
-    box-shadow: 0 0 18px rgba(255, 0, 0, 0.55) !important;
+    color: #ffffff !important;
+    border: 1px solid rgba(255,128,128,0.80) !important;
+    box-shadow: 0 0 20px rgba(255,0,0,0.58) !important;
 }
 
 .stButton button:hover,
 button:hover {
-    box-shadow: 0 0 30px rgba(255, 0, 0, 0.95) !important;
-    border-color: #ff8080 !important;
+    background: linear-gradient(90deg, #b00020, #ff3333, #ff6666) !important;
+    color: white !important;
+    box-shadow: 0 0 32px rgba(255,0,0,0.95) !important;
+    transform: translateY(-1px);
+}
+
+/* Inputs/selects/radio/checkbox */
+input,
+textarea,
+select,
+[data-baseweb="input"],
+[data-baseweb="textarea"],
+[data-baseweb="select"],
+[data-baseweb="select"] *,
+[data-baseweb="radio"],
+[data-baseweb="checkbox"],
+div[role="radiogroup"] label,
+.stSelectbox,
+.stNumberInput,
+.stTextInput,
+.stTextArea {
+    background-color: #160000 !important;
+    color: #ffe0e0 !important;
+    border-color: rgba(255,51,51,0.72) !important;
+}
+
+input:focus,
+textarea:focus,
+[data-baseweb="input"]:focus-within,
+[data-baseweb="textarea"]:focus-within,
+[data-baseweb="select"]:focus-within {
+    border-color: #ff3333 !important;
+    box-shadow: 0 0 14px rgba(255,0,0,0.80) !important;
+}
+
+div[role="radiogroup"] label:hover,
+[data-baseweb="radio"]:hover {
+    background: rgba(255,0,0,0.22) !important;
+    box-shadow: 0 0 14px rgba(255,0,0,0.45) !important;
+}
+
+/* Sliders */
+[data-baseweb="slider"] div,
+.stSlider div {
+    border-color: #ff3333 !important;
+}
+
+[data-baseweb="slider"] [role="slider"] {
+    background-color: #ff3333 !important;
+    box-shadow: 0 0 16px rgba(255,0,0,0.95) !important;
 }
 
 /* Progress bars */
@@ -3120,91 +3197,67 @@ button:hover {
 .stProgress div div div,
 [data-testid="stProgress"] div div div {
     background: linear-gradient(90deg, #8b0000, #d90429, #ff3333, #ff9999) !important;
-    box-shadow: 0 0 20px rgba(255, 0, 0, 0.90) !important;
+    box-shadow: 0 0 22px rgba(255,0,0,0.95) !important;
 }
 
-/* Radio, checkboxes, sliders, selectboxes, inputs */
-* {
-    accent-color: #ff2b2b !important;
+.progress-track {
+    background: #100000 !important;
+    border: 1px solid rgba(255,51,51,0.65) !important;
 }
 
-div[role="radiogroup"] label,
-[data-baseweb="radio"] label,
-[data-baseweb="checkbox"] label {
-    background: rgba(255, 0, 0, 0.12) !important;
-    border: 1px solid rgba(255, 51, 51, 0.50) !important;
-    color: #ffe0e0 !important;
-}
-
-div[role="radiogroup"] label:hover {
-    background: rgba(255, 0, 0, 0.24) !important;
-    box-shadow: 0 0 14px rgba(255, 0, 0, 0.45) !important;
-}
-
-div[role="radiogroup"] label:has(input:checked) {
-    background: linear-gradient(90deg, #8b0000, #ff3333) !important;
-    border-color: #ff9999 !important;
-    box-shadow: 0 0 18px rgba(255, 0, 0, 0.70) !important;
-}
-
-input,
-textarea,
-[data-baseweb="input"],
-[data-baseweb="textarea"],
-[data-baseweb="select"],
-[data-testid="stFileUploader"],
-.stSelectbox div,
-.stNumberInput div {
-    background-color: rgba(22, 0, 0, 0.92) !important;
-    border-color: rgba(255, 51, 51, 0.65) !important;
-    color: #ffe0e0 !important;
-}
-
-input:focus,
-textarea:focus {
-    border-color: #ff3333 !important;
-    box-shadow: 0 0 12px rgba(255, 0, 0, 0.75) !important;
-}
-
-/* Slider track/thumb */
-.stSlider [data-baseweb="slider"] div,
-[data-baseweb="slider"] div {
-    background-color: #ff3333 !important;
-}
-
-[data-baseweb="slider"] [role="slider"] {
-    background-color: #ff3333 !important;
-    box-shadow: 0 0 12px rgba(255,0,0,.9) !important;
-}
-
-/* Text and links */
-h1, h2, h3, h4, h5, h6,
-p, span, label, div {
-    border-color: rgba(255, 51, 51, 0.35);
-}
-
-a {
+/* Tabs / selected indicators / links */
+a,
+[data-testid="stSidebarNav"] a,
+button[aria-selected="true"],
+[aria-selected="true"] {
     color: #ff6666 !important;
+    border-color: #ff3333 !important;
 }
 
-/* Dataframes and tables */
-[data-testid="stDataFrame"],
-[data-testid="stTable"],
-table {
-    border-color: rgba(255, 51, 51, 0.55) !important;
+/* Tables/dataframe internals */
+table,
+thead,
+tbody,
+tr,
+td,
+th,
+[data-testid="stDataFrame"] * {
+    background-color: #160000 !important;
+    color: #ffe0e0 !important;
+    border-color: rgba(255,51,51,0.35) !important;
 }
 
-/* Alerts */
-[data-testid="stAlert"] {
-    background: rgba(80, 0, 0, 0.90) !important;
-    border-color: rgba(255, 51, 51, 0.70) !important;
+/* File uploader internal text/button */
+[data-testid="stFileUploader"] *,
+[data-testid="stFileUploaderDropzone"] {
+    background-color: #160000 !important;
+    color: #ffe0e0 !important;
+    border-color: rgba(255,51,51,0.72) !important;
+}
+
+/* Expander headers */
+.streamlit-expanderHeader,
+[data-testid="stExpander"] summary {
+    background: #220000 !important;
     color: #ffe0e0 !important;
 }
 
 /* Scrollbar */
+::-webkit-scrollbar {
+    background: #050000 !important;
+}
+
 ::-webkit-scrollbar-thumb {
     background: #d90429 !important;
-    box-shadow: 0 0 10px rgba(255,0,0,.9) !important;
+    box-shadow: 0 0 12px rgba(255,0,0,0.90) !important;
+}
+
+/* Remove any default focus blue rings */
+*:focus,
+*:focus-visible {
+    outline-color: #ff3333 !important;
+    box-shadow: 0 0 0 2px rgba(255,0,0,0.45) !important;
 }
 </style>
 """, unsafe_allow_html=True)
+
