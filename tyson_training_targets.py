@@ -3707,7 +3707,7 @@ if page == "Home":
     st.markdown("### Snapshot")
     m1, m2, m3, m4 = st.columns(4)
     with m1:
-        compact_metric("Total Sets", summary["total_sets"], "deduped working sets")
+        compact_metric("Total Sets", summary["total_sets"], "working sets")
     with m2:
         compact_metric("Total Reps", summary["total_reps"], "logged reps")
     with m3:
