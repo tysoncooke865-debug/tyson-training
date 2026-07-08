@@ -1257,7 +1257,7 @@ st.markdown("""
 <div class="nw-hero">
     <div class="nw-hero-title">⚡ Training Tracker</div>
     <div class="nw-hero-sub">PPPPLA Split</div>
-    <span class="nw-badge"Push • Pull • Legs • Aesthetics • Recovery"</span>
+    <span class="nw-badge">Push • Pull • Legs • Aesthetics • Recovery</span>
     <div class="nw-scanline"></div>
 </div>
 """, unsafe_allow_html=True)
