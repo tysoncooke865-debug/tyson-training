@@ -1221,12 +1221,41 @@ def calculate_avatar_stats():
     bench_ratio = bench / bodyweight if bodyweight else 0
     squat_ratio = squat / bodyweight if bodyweight else 0
 
+    # Strength: based on relative e1RM. 1.5x bench + 2x squat is around 100.
     strength_score = int(max(0, min((bench_ratio / 1.5) * 55 + (squat_ratio / 2.0) * 45, 100)))
 
+    # Logged muscle sets are useful, but should not make size look 2/100 just because
+    # the app has limited history. Blend actual logs, strength, bodyweight and AI physique rating.
     muscle_sets = 0
     if not heat.empty and "sets" in heat.columns:
         muscle_sets = int(pd.to_numeric(heat["sets"], errors="coerce").fillna(0).sum())
-    size_score = min(100, int(muscle_sets / 12))
+
+    volume_size_component = max(0, min(int(muscle_sets / 4), 100))  # faster ramp than old /12
+    strength_size_component = int(max(0, min(strength_score * 0.85, 100)))
+
+    ai_muscularity = safe_num(physique.get("muscularity_score"), None)
+    ai_physique = safe_num(physique.get("physique_score"), None)
+
+    if ai_muscularity is not None:
+        ai_size_component = int(max(0, min((ai_muscularity / 15) * 100, 100)))
+    elif ai_physique is not None:
+        ai_size_component = int(max(0, min((ai_physique / 15) * 100, 100)))
+    else:
+        # Conservative baseline based on your strength/bodyweight, not a beginner score.
+        ai_size_component = 55 if bench_ratio >= 1.0 else 45
+
+    bodyweight_component = score_0_100(bodyweight, 65, 88)
+
+    size_score = int(max(
+        25,  # minimum baseline so the avatar does not look broken
+        min(
+            (ai_size_component * 0.35) +
+            (strength_size_component * 0.30) +
+            (bodyweight_component * 0.20) +
+            (volume_size_component * 0.15),
+            100
+        )
+    ))
 
     if bf_mid is not None and safe_num(bf_mid, 0) > 0:
         leanness_score = int(max(0, min(100, 100 - ((safe_num(bf_mid) - 8) * 6.5))))
@@ -1234,9 +1263,18 @@ def calculate_avatar_stats():
         ai_lean = physique.get("leanness_score")
         leanness_score = int(safe_num(ai_lean, 7.5) / 15 * 100)
 
+    # Conditioning: no cardio logs should mean "unlogged", not 0/100.
+    # Give a baseline, then increase from minutes/distance.
     total_cardio_minutes = safe_num(cardio.get("minutes", 0), 0)
     total_distance = safe_num(cardio.get("distance", 0), 0)
-    conditioning_score = int(max(0, min((total_cardio_minutes / 1000) * 70 + (total_distance / 100) * 30, 100)))
+
+    if total_cardio_minutes <= 0 and total_distance <= 0:
+        conditioning_score = 35
+    else:
+        conditioning_score = int(max(25, min(
+            30 + (total_cardio_minutes / 1000) * 45 + (total_distance / 100) * 25,
+            100
+        )))
 
     ai_phys_score = safe_num(physique.get("physique_score"), 8.0) / 15 * 100
     symmetry_score = safe_num(physique.get("symmetry_score"), 8.0) / 15 * 100
@@ -1306,6 +1344,7 @@ def calculate_avatar_stats():
         "bodyweight": float(bodyweight),
         "bf_mid": bf_mid,
     }
+
 
 
 def avatar_stage(level):
@@ -4056,6 +4095,7 @@ elif page == "Avatar":
     c1, c2 = st.columns([1, 1])
 
     with c1:
+        st.caption("Avatar scores are blended from strength, AI physique ratings, logs and measurements — they won’t show 0 just because a category has limited app history.")
         st.subheader("Character Stats")
         render_avatar_stat("Strength", stats["strength_score"])
         render_avatar_stat("Size", stats["size_score"])
