@@ -74,6 +74,158 @@ ROUTINE = {
     "Rest": [],
 }
 
+
+EXERCISE_LIBRARY = {
+    "Upper Chest": [
+        "Incline Barbell Bench Press",
+        "Incline Dumbbell Bench Press",
+        "Low-to-High Cable Fly",
+        "Incline Smith Machine Press",
+        "Incline Machine Chest Press",
+    ],
+    "Mid Chest": [
+        "Barbell Bench Press",
+        "Dumbbell Flat Bench Press",
+        "Machine Chest Press",
+        "Pec Deck Machine Fly",
+        "Cable Chest Fly",
+        "Decline Push-Up",
+    ],
+    "Side Delts": [
+        "Cable Lateral Raise",
+        "Dumbbell Lateral Raise",
+        "Machine Lateral Raise",
+        "Lean-Away Cable Lateral Raise",
+        "Behind-the-Back Cable Lateral Raise",
+    ],
+    "Rear Delts": [
+        "Reverse Pec Deck (Rear Delt Fly)",
+        "Cable Rear Delt Fly",
+        "Face Pull",
+        "Chest-Supported Rear Delt Row",
+    ],
+    "Back Width": [
+        "Lat Pulldown",
+        "Neutral-Grip Lat Pulldown",
+        "Assisted Pull-Up",
+        "Cable Lat Pullover (Straight-Arm Pulldown)",
+        "Single-Arm Cable Lat Pulldown",
+    ],
+    "Back Thickness": [
+        "Chest-Supported Machine Row",
+        "Chest-Supported Dumbbell Row",
+        "Seated Cable Row",
+        "T-Bar Row",
+        "Machine High Row",
+    ],
+    "Biceps": [
+        "EZ-Bar Curl",
+        "Dumbbell Biceps Curl",
+        "Incline Dumbbell Curl",
+        "Cable Curl",
+        "Preacher Curl Machine",
+        "Hammer Curl",
+    ],
+    "Triceps": [
+        "Cable Triceps Pushdown",
+        "Overhead Cable Triceps Extension",
+        "Machine Dip",
+        "Close-Grip Bench Press",
+        "Single-Arm Cable Triceps Extension",
+    ],
+    "Quads": [
+        "Barbell Back Squat",
+        "Hack Squat Machine",
+        "Leg Press",
+        "Bulgarian Split Squat",
+        "Leg Extension",
+        "Smith Machine Squat",
+    ],
+    "Hamstrings": [
+        "Seated/Lying Leg Curl",
+        "Romanian Deadlift",
+        "Seated Leg Curl",
+        "Lying Leg Curl",
+        "Back Extension",
+    ],
+    "Glutes/Adductors": [
+        "Hip Adduction Machine",
+        "Hip Abduction Machine",
+        "Cable Kickback",
+        "Hip Thrust Machine",
+    ],
+    "Calves": [
+        "Seated Calf Raise",
+        "Standing Calf Raise",
+        "Leg Press Calf Raise",
+    ],
+    "Abs": [
+        "Machine Ab Crunch",
+        "Lying Leg Raise",
+        "Hanging Knee Raise",
+        "Cable Crunch",
+        "Weighted Sit-Up",
+        "Decline Sit-Up",
+    ],
+    "Forearms/Grip": [
+        "Wrist Curl",
+        "Reverse Curl",
+        "Farmer Carry",
+        "Cable Wrist Curl",
+    ],
+}
+
+FALLBACK_AESTHETIC_PLAN = {
+    "Push 1 - Strength Bias": [
+        ("Barbell Bench Press", 4, "3-6"),
+        ("Incline Dumbbell Bench Press", 3, "8-12"),
+        ("Machine Chest Press", 3, "8-12"),
+        ("Lean-Away Cable Lateral Raise", 4, "15-25"),
+        ("Overhead Cable Triceps Extension", 3, "10-15"),
+        ("Cable Triceps Pushdown", 3, "12-20"),
+    ],
+    "Pull 1 - Width Bias": [
+        ("Neutral-Grip Lat Pulldown", 4, "8-12"),
+        ("Single-Arm Cable Lat Pulldown", 3, "10-15"),
+        ("Chest-Supported Machine Row", 3, "8-12"),
+        ("Cable Rear Delt Fly", 4, "15-25"),
+        ("Incline Dumbbell Curl", 3, "10-15"),
+        ("Hammer Curl", 3, "10-15"),
+    ],
+    "Push 2 - Upper Chest / Delts": [
+        ("Incline Smith Machine Press", 4, "6-10"),
+        ("Low-to-High Cable Fly", 3, "12-20"),
+        ("Machine Lateral Raise", 5, "12-25"),
+        ("Behind-the-Back Cable Lateral Raise", 3, "15-25"),
+        ("Machine Dip", 3, "8-12"),
+        ("Single-Arm Cable Triceps Extension", 3, "12-20"),
+    ],
+    "Pull 2 - Thickness / Rear Delts": [
+        ("T-Bar Row", 4, "6-10"),
+        ("Machine High Row", 3, "8-12"),
+        ("Cable Lat Pullover (Straight-Arm Pulldown)", 3, "12-20"),
+        ("Reverse Pec Deck (Rear Delt Fly)", 4, "15-25"),
+        ("Preacher Curl Machine", 3, "8-12"),
+        ("Cable Curl", 3, "12-20"),
+    ],
+    "Legs": [
+        ("Hack Squat Machine", 4, "6-10"),
+        ("Romanian Deadlift", 3, "8-12"),
+        ("Leg Press", 3, "10-15"),
+        ("Leg Extension", 3, "12-20"),
+        ("Seated Leg Curl", 3, "10-15"),
+        ("Standing Calf Raise", 4, "10-20"),
+    ],
+    "Aesthetic Weakpoint Day": [
+        ("Machine Lateral Raise", 5, "15-25"),
+        ("Low-to-High Cable Fly", 4, "12-20"),
+        ("Single-Arm Cable Lat Pulldown", 3, "12-15"),
+        ("Cable Rear Delt Fly", 4, "15-25"),
+        ("Cable Crunch", 3, "10-15"),
+        ("Hanging Knee Raise", 3, "10-20"),
+    ],
+}
+
 MUSCLE_MAP = {
     "Barbell Bench Press (Strength)": "Chest",
     "Paused Barbell Bench Press": "Chest",
@@ -772,6 +924,142 @@ Be realistic and useful, not flattering.
         return None, f"AI physique rating failed: {e}"
 
 
+
+def run_ai_custom_plan_from_physique(rating, measurements, goals, model_name):
+    """
+    Uses AI to build a custom plan from the exercise library, not just reusing the default PPPPLA.
+    """
+    try:
+        from openai import OpenAI
+    except Exception as e:
+        return None, f"OpenAI package not installed. Add 'openai' to requirements.txt. Error: {e}"
+
+    api_key = None
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+    except Exception:
+        api_key = None
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        return None, "Missing OPENAI_API_KEY. Add it to Streamlit Cloud secrets."
+
+    client = OpenAI(api_key=api_key)
+
+    prompt = f"""
+You are an expert bodybuilding coach making a custom workout plan for an aesthetic-focused lifter.
+
+The user currently runs PPPPLA, but DO NOT simply repeat the existing routine.
+Choose the best exercises from the exercise library below to target the physique weak points.
+
+Exercise library:
+{json.dumps(EXERCISE_LIBRARY, indent=2)}
+
+Physique rating/weak points:
+{json.dumps(rating, indent=2)}
+
+Measurements:
+{json.dumps(measurements, indent=2)}
+
+Goal:
+{goals}
+
+Requirements:
+- Create a 6-day split using these day names:
+  1. Push 1 - Strength Bias
+  2. Pull 1 - Width Bias
+  3. Push 2 - Hypertrophy Bias
+  4. Pull 2 - Thickness Bias
+  5. Legs
+  6. Aesthetic Weakpoint Day
+- Each day must have 5-8 exercises.
+- Choose exercises from the library. You may include the user's favourite exercises if suitable, but the plan must be meaningfully different from the old PPPPLA.
+- Prioritise weak points from the physique rating.
+- Include sets, reps, and a short reason for each exercise.
+- Keep bench press progression if chest/strength is relevant.
+- Bias side delts, upper chest, lats, rear delts, abs, or whatever weak points the AI rating says.
+- Return ONLY valid JSON.
+
+JSON schema:
+{{
+  "plan_name": "string",
+  "rationale": "short summary",
+  "weekly_focus": ["focus 1", "focus 2", "focus 3"],
+  "days": [
+    {{
+      "day": "Push 1 - Strength Bias",
+      "goal": "short day goal",
+      "exercises": [
+        {{
+          "exercise": "exercise name",
+          "sets": number,
+          "reps": "rep range string",
+          "reason": "why selected"
+        }}
+      ]
+    }}
+  ]
+}}
+"""
+
+    try:
+        response = client.responses.create(
+            model=model_name,
+            input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
+        )
+        text = getattr(response, "output_text", None) or str(response)
+        text_clean = text.strip().replace("```json", "").replace("```", "").strip()
+        data = json.loads(text_clean)
+
+        if "days" not in data:
+            return None, f"AI response missing 'days'. Raw: {text[:500]}"
+
+        return data, None
+
+    except Exception as e:
+        return None, f"AI custom plan failed: {e}"
+
+
+def save_ai_custom_plan(ai_plan):
+    rows = []
+    for day in ai_plan.get("days", []):
+        for ex in day.get("exercises", []):
+            rows.append({
+                "workout": day.get("day", ""),
+                "exercise": ex.get("exercise", ""),
+                "sets": ex.get("sets", ""),
+                "reps": ex.get("reps", ""),
+                "reason": ex.get("reason", ""),
+                "day_goal": day.get("goal", ""),
+                "plan_name": ai_plan.get("plan_name", "AI Custom Plan"),
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+
+    if not rows:
+        return False
+
+    pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
+    return True
+
+
+def save_fallback_custom_plan(plan):
+    rows = []
+    for workout, exercises in plan.items():
+        for exercise, sets, reps in exercises:
+            rows.append({
+                "workout": workout,
+                "exercise": exercise,
+                "sets": sets,
+                "reps": reps,
+                "reason": "Fallback weak-point aesthetic plan",
+                "day_goal": "Aesthetic development",
+                "plan_name": "Fallback Aesthetic Weakpoint Plan",
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+    pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
+
+
+
 def generate_custom_plan_from_data(weak_points=None, priorities=None, goal="Aesthetic / lean bulk"):
     weak_points = weak_points or []
     priorities = priorities or []
@@ -856,7 +1144,7 @@ def save_custom_plan(plan):
 
 
 def load_custom_plan():
-    return load_csv(CUSTOM_PLAN_FILE, ["workout", "exercise", "sets", "reps", "timestamp"])
+    return load_csv(CUSTOM_PLAN_FILE, ["workout", "exercise", "sets", "reps", "reason", "day_goal", "plan_name", "timestamp"])
 
 
 
@@ -1255,9 +1543,9 @@ div[data-testid="stMetric"] { background: rgba(15,23,42,.65); border: 1px solid 
 
 st.markdown("""
 <div class="nw-hero">
-    <div class="nw-hero-title">⚡ Training Tracker</div>
-    <div class="nw-hero-sub">PPPPLA Split</div>
-    <span class="nw-badge">Push • Pull • Legs • Aesthetics • Recovery</span>
+    <div class="nw-hero-title">⚡ Tyson Training</div>
+    <div class="nw-hero-sub">Nightwing-inspired PPPPLA tracker</div>
+    <span class="nw-badge">Bench Strength • V-Taper • Delts • Cardio • XP System</span>
     <div class="nw-scanline"></div>
 </div>
 """, unsafe_allow_html=True)
@@ -1534,16 +1822,43 @@ elif page == "Physique":
             st.rerun()
 
         st.subheader("Generate Custom Workout Plan")
-        goal = st.selectbox("Goal", ["Aesthetic / lean bulk", "Cutting / maintain muscle", "Bench strength focus", "V-taper focus"])
-        if st.button("Generate Plan From Physique Analysis", type="primary"):
-            plan = generate_custom_plan_from_data(
-                weak_points=rating.get("weak_points", []),
-                priorities=rating.get("training_priority", []),
-                goal=goal,
-            )
-            save_custom_plan(plan)
-            st.session_state.just_saved_message = "CUSTOM WORKOUT PLAN GENERATED"
-            st.rerun()
+        goal = st.selectbox(
+            "Goal",
+            ["Aesthetic / lean bulk", "Cutting / maintain muscle", "Bench strength focus", "V-taper focus", "Arms/Delts specialization", "Upper chest specialization"]
+        )
+
+        st.caption("This uses the AI physique rating + measurements + a larger exercise library to build a weak-point plan. It will not simply copy your current PPPPLA.")
+
+        if st.button("Generate AI Custom Plan From Physique Analysis", type="primary"):
+            with st.spinner("AI is building a custom weak-point plan..."):
+                ai_plan, err = run_ai_custom_plan_from_physique(
+                    rating=rating,
+                    measurements=latest_measurements(),
+                    goals=goal,
+                    model_name=model_name,
+                )
+
+            if err:
+                st.warning(err)
+                st.info("Using fallback weak-point aesthetic plan instead.")
+                save_fallback_custom_plan(FALLBACK_AESTHETIC_PLAN)
+                st.session_state.just_saved_message = "FALLBACK CUSTOM PLAN GENERATED"
+                st.rerun()
+            else:
+                ok = save_ai_custom_plan(ai_plan)
+                if ok:
+                    st.session_state["last_ai_plan"] = ai_plan
+                    st.session_state.just_saved_message = "AI CUSTOM WORKOUT PLAN GENERATED"
+                    st.rerun()
+                else:
+                    st.error("AI returned a plan, but no exercises could be saved.")
+
+        last_plan = st.session_state.get("last_ai_plan", None)
+        if last_plan:
+            st.subheader(last_plan.get("plan_name", "AI Custom Plan"))
+            st.write(last_plan.get("rationale", ""))
+            if last_plan.get("weekly_focus"):
+                st.write("**Weekly focus:** " + ", ".join(last_plan.get("weekly_focus", [])))
 
     st.subheader("Saved Physique Ratings")
     ratings = load_physique_ratings()
@@ -1827,7 +2142,7 @@ elif page == "Body Fat":
             c1, c2, c3 = st.columns(3)
             c1.metric("Estimated BF%", f"{navy_bf:.1f}%")
             c2.metric("Lean Mass", f"{lean_mass:.1f}kg")
-            c3.metric(f"{target_bf:.1f}% Target", f"{target_weight:.1f}kg")
+            c3.metric(f"{target_bf:.1f}% Target", f"{safe_kg(target_weight)}")
 
             st.markdown(
                 f"""
@@ -1854,7 +2169,7 @@ elif page == "Body Fat":
                     "bf_high": round(bf_high, 2),
                     "bf_mid": round(navy_bf, 2),
                     "confidence": "medium",
-                    "notes": f"US Navy-style measurement estimate. Target {target_bf}% weight: {target_weight:.1f}kg.",
+                    "notes": f"US Navy-style measurement estimate. Target {target_bf}% weight: {safe_kg(target_weight)}.",
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                 })
                 st.session_state.just_saved_message = "BODY FAT ESTIMATE SAVED"
@@ -1962,7 +2277,7 @@ elif page == "Body Fat":
             c1, c2, c3 = st.columns(3)
             c1.metric("Combined Range", f"{combined_low:.1f}-{combined_high:.1f}%")
             c2.metric("Combined Mid", f"{combined_mid:.1f}%")
-            c3.metric(f"{target_bf:.1f}% Target", f"{target_weight:.1f}kg")
+            c3.metric(f"{target_bf:.1f}% Target", f"{safe_kg(target_weight)}")
 
             if st.button("Save Combined Estimate", type="primary"):
                 save_bodyfat_estimate({
@@ -1976,7 +2291,7 @@ elif page == "Body Fat":
                     "bf_high": round(combined_high, 2),
                     "bf_mid": round(combined_mid, 2),
                     "confidence": "medium",
-                    "notes": f"Combined measurement + AI estimate. Target {target_bf}% weight: {target_weight:.1f}kg.",
+                    "notes": f"Combined measurement + AI estimate. Target {target_bf}% weight: {safe_kg(target_weight)}.",
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                 })
                 st.session_state.just_saved_message = "COMBINED BODY FAT ESTIMATE SAVED"
@@ -2031,7 +2346,7 @@ elif page == "Delete Data":
     elif log_type == "Physique Ratings":
         path, columns = PHYSIQUE_RATING_FILE, ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"]
     elif log_type == "Custom Plan":
-        path, columns = CUSTOM_PLAN_FILE, ["workout", "exercise", "sets", "reps", "timestamp"]
+        path, columns = CUSTOM_PLAN_FILE, ["workout", "exercise", "sets", "reps", "reason", "day_goal", "plan_name", "timestamp"]
     elif log_type == "Targets":
         path, columns = TARGETS_FILE, ["target_type", "name", "target_value", "unit", "created_at", "notes"]
     elif log_type == "Profile":
