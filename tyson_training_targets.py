@@ -6,6 +6,7 @@ import os
 import base64
 import json
 import math
+from supabase import create_client
 import zipfile
 from io import BytesIO
 
@@ -20,6 +21,90 @@ CUSTOM_PLAN_FILE = Path("custom_workout_plan.csv")
 TARGETS_FILE = Path("targets.csv")
 PROFILE_FILE = Path("profile.csv")
 ACHIEVEMENT_FILE = Path("achievements.csv")
+
+# -----------------------------
+# SUPABASE CONFIG / CSV BACKUP
+# -----------------------------
+@st.cache_resource
+def get_supabase_client():
+    try:
+        url = st.secrets.get("SUPABASE_URL", None)
+        key = st.secrets.get("SUPABASE_KEY", None)
+    except Exception:
+        url = None
+        key = None
+    url = url or os.getenv("SUPABASE_URL")
+    key = key or os.getenv("SUPABASE_KEY")
+    if not url or not key:
+        return None
+    try:
+        return create_client(url, key)
+    except Exception:
+        return None
+
+
+def supabase_enabled():
+    return get_supabase_client() is not None
+
+
+def sb_select(table_name):
+    sb = get_supabase_client()
+    if sb is None:
+        return None, "Supabase not configured"
+    try:
+        res = sb.table(table_name).select("*").execute()
+        return res.data or [], None
+    except Exception as e:
+        return None, str(e)
+
+
+def sb_insert(table_name, row):
+    sb = get_supabase_client()
+    if sb is None:
+        return False, "Supabase not configured"
+    try:
+        clean = {}
+        for k, v in row.items():
+            try:
+                clean[k] = None if pd.isna(v) else v
+            except Exception:
+                clean[k] = v
+        sb.table(table_name).insert(clean).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def sb_delete_matching(table_name, filters):
+    sb = get_supabase_client()
+    if sb is None:
+        return False, "Supabase not configured"
+    try:
+        query = sb.table(table_name).delete()
+        for k, v in filters.items():
+            query = query.eq(k, v)
+        query.execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def df_from_supabase(table_name, fallback_path, columns):
+    data, err = sb_select(table_name)
+    if data is not None:
+        df = pd.DataFrame(data)
+        for col in columns:
+            if col not in df.columns:
+                df[col] = ""
+        return df
+    return load_csv(fallback_path, columns)
+
+
+def append_csv_backup(path, columns, row):
+    df = load_csv(path, columns)
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(path, index=False)
+
+
 
 ROUTINE = {
     "Push 1 - Strength": [
@@ -412,6 +497,24 @@ def load_csv(path, columns):
     return pd.DataFrame(columns=columns)
 
 
+def load_bodyweight_log():
+    return df_from_supabase("bodyweight_log", BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+
+
+def load_cardio_log():
+    return df_from_supabase("cardio_log", CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"])
+
+
+def save_bodyweight_row(row):
+    sb_insert("bodyweight_log", row)
+    append_csv_backup(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"], row)
+
+
+def save_cardio_row(row):
+    sb_insert("cardio_log", row)
+    append_csv_backup(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"], row)
+
+
 def normalise_workout_log(df):
     if "set" not in df.columns and "set_number" in df.columns:
         df = df.rename(columns={"set_number": "set"})
@@ -422,11 +525,12 @@ def normalise_workout_log(df):
 
 
 def load_log():
-    return normalise_workout_log(load_csv(LOG_FILE, ["date", "workout", "exercise", "set", "weight", "reps", "timestamp"]))
+    columns = ["date", "workout", "exercise", "set", "weight", "reps", "timestamp"]
+    return normalise_workout_log(df_from_supabase("workout_log", LOG_FILE, columns))
 
 
 def load_achievements():
-    return load_csv(ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"])
+    return df_from_supabase("achievements", ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"])
 
 
 def save_achievement(achievement_id):
@@ -434,13 +538,9 @@ def save_achievement(achievement_id):
     if achievement_id in ach["achievement_id"].astype(str).tolist():
         return False
     name, desc = ACHIEVEMENTS[achievement_id]
-    new = pd.DataFrame([{
-        "achievement_id": achievement_id,
-        "name": name,
-        "description": desc,
-        "date_unlocked": datetime.now().isoformat(timespec="seconds"),
-    }])
-    pd.concat([ach, new], ignore_index=True).to_csv(ACHIEVEMENT_FILE, index=False)
+    row = {"achievement_id": achievement_id, "name": name, "description": desc, "date_unlocked": datetime.now().isoformat(timespec="seconds")}
+    sb_insert("achievements", row)
+    append_csv_backup(ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"], row)
     return True
 
 
@@ -505,35 +605,19 @@ def completed_sets_for_day(df, workout_date, workout):
 def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
     if weight <= 0 or reps <= 0:
         return False, False, 0, 0
-
     df_before = load_log()
     previous_best = get_previous_best_1rm(df_before, exercise, exclude_date=workout_date, exclude_set=set_no)
     current_1rm = estimated_1rm(float(weight), int(reps))
     is_pr = current_1rm > previous_best and previous_best > 0
-
     df = normalise_workout_log(df_before)
     df["date"] = df["date"].astype(str)
     df["workout"] = df["workout"].astype(str)
     df["exercise"] = df["exercise"].astype(str)
     df["set"] = pd.to_numeric(df["set"], errors="coerce").fillna(0).astype(int)
-
-    mask = (
-        (df["date"] == str(workout_date)) &
-        (df["workout"] == str(workout)) &
-        (df["exercise"] == str(exercise)) &
-        (df["set"] == int(set_no))
-    )
-
-    new_row = {
-        "date": str(workout_date),
-        "workout": workout,
-        "exercise": exercise,
-        "set": int(set_no),
-        "weight": float(weight),
-        "reps": int(reps),
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-    }
-
+    mask = ((df["date"] == str(workout_date)) & (df["workout"] == str(workout)) & (df["exercise"] == str(exercise)) & (df["set"] == int(set_no)))
+    muscle = infer_muscle_group(exercise) if "infer_muscle_group" in globals() else MUSCLE_MAP.get(exercise, "Other")
+    sb_row = {"date": str(workout_date), "workout": workout, "exercise": exercise, "muscle": muscle, "set": int(set_no), "weight": float(weight), "reps": int(reps), "estimated_1rm": float(current_1rm), "volume": float(weight) * int(reps), "timestamp": datetime.now().isoformat(timespec="seconds")}
+    csv_row = {"date": str(workout_date), "workout": workout, "exercise": exercise, "set": int(set_no), "weight": float(weight), "reps": int(reps), "timestamp": sb_row["timestamp"]}
     if mask.any():
         old = df.loc[mask].iloc[-1]
         try:
@@ -545,22 +629,16 @@ def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
         if same_weight and same_reps:
             return False, False, current_1rm, previous_best
         df = df.loc[~mask].copy()
-
-    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        sb_delete_matching("workout_log", {"date": str(workout_date), "workout": str(workout), "exercise": str(exercise), "set": int(set_no)})
+    df = pd.concat([df, pd.DataFrame([csv_row])], ignore_index=True)
     df.to_csv(LOG_FILE, index=False)
+    sb_insert("workout_log", sb_row)
     check_achievements()
     return True, is_pr, current_1rm, previous_best
 
 
-
-
 def load_targets():
-    return load_csv(
-        TARGETS_FILE,
-        ["target_type", "name", "target_value", "unit", "created_at", "notes"]
-    )
-
-
+    return df_from_supabase("targets", TARGETS_FILE, ["target_type", "name", "target_value", "unit", "created_at", "notes"])
 
 
 def save_or_update_target(target_type, name, target_value, unit, notes=""):
@@ -568,18 +646,12 @@ def save_or_update_target(target_type, name, target_value, unit, notes=""):
     if not df.empty:
         df["target_type"] = df["target_type"].astype(str)
         df["name"] = df["name"].astype(str)
-        mask = (df["target_type"] == str(target_type)) & (df["name"] == str(name))
-        df = df.loc[~mask].copy()
+        df = df.loc[~((df["target_type"] == str(target_type)) & (df["name"] == str(name)))].copy()
+    row = {"target_type": target_type, "name": name, "target_value": float(target_value), "unit": unit, "created_at": datetime.now().isoformat(timespec="seconds"), "notes": notes}
+    sb_delete_matching("targets", {"target_type": str(target_type), "name": str(name)})
+    sb_insert("targets", row)
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(TARGETS_FILE, index=False)
 
-    new_row = {
-        "target_type": target_type,
-        "name": name,
-        "target_value": float(target_value),
-        "unit": unit,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-        "notes": notes,
-    }
-    pd.concat([df, pd.DataFrame([new_row])], ignore_index=True).to_csv(TARGETS_FILE, index=False)
 
 def get_target(target_type, name):
     df = load_targets()
@@ -598,26 +670,15 @@ def get_target(target_type, name):
 
 
 def load_profile():
-    return load_csv(
-        PROFILE_FILE,
-        ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"]
-    )
+    columns = ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"]
+    return df_from_supabase("profile", PROFILE_FILE, columns)
 
 
 def save_profile(height_cm, bodyweight_kg, bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score):
     base_level = calculate_starting_level(bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score)
-    df = pd.DataFrame([{
-        "height_cm": height_cm,
-        "bodyweight_kg": bodyweight_kg,
-        "bench_e1rm": bench_e1rm,
-        "squat_e1rm": squat_e1rm,
-        "training_years": training_years,
-        "physique_score": physique_score,
-        "leanness_score": leanness_score,
-        "base_level": base_level,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-    }])
-    df.to_csv(PROFILE_FILE, index=False)
+    row = {"height_cm": height_cm, "bodyweight_kg": bodyweight_kg, "bench_e1rm": bench_e1rm, "squat_e1rm": squat_e1rm, "training_years": training_years, "physique_score": physique_score, "leanness_score": leanness_score, "base_level": base_level, "created_at": datetime.now().isoformat(timespec="seconds")}
+    sb_insert("profile", row)
+    pd.DataFrame([row]).to_csv(PROFILE_FILE, index=False)
     return base_level
 
 
@@ -715,7 +776,7 @@ def current_exercise_best_1rm(exercise_name):
 
 
 def latest_bodyweight_value():
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     if bw_df.empty:
         return None
     bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
@@ -782,7 +843,7 @@ def workout_summary(df):
     else:
         best_bench_1rm = 0
 
-    cardio = load_csv(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"])
+    cardio = load_cardio_log()
     cardio["minutes"] = pd.to_numeric(cardio.get("minutes", 0), errors="coerce").fillna(0)
     cardio_minutes = float(cardio["minutes"].sum()) if not cardio.empty else 0
 
@@ -792,7 +853,7 @@ def workout_summary(df):
     level = max(1, min(base_level + earned_levels, 100))
     xp_into_level = xp % 500
 
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     latest_bw = 0
     if not bw_df.empty:
         bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
@@ -899,7 +960,7 @@ def logged_all_ppppla_days(df):
 
 
 def get_bodyweight_stats():
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     if bw_df.empty:
         return {"latest": None, "min": None, "max": None, "count": 0}
     bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
@@ -920,19 +981,13 @@ def get_bodyweight_stats():
 
 
 def load_measurements():
-    return load_csv(
-        MEASUREMENTS_FILE,
-        [
-            "date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm",
-            "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm",
-            "shoulders_cm", "neck_cm", "notes", "timestamp"
-        ]
-    )
+    columns = ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"]
+    return df_from_supabase("measurements", MEASUREMENTS_FILE, columns)
 
 
 def save_measurements(row):
-    df = load_measurements()
-    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(MEASUREMENTS_FILE, index=False)
+    sb_insert("measurements", row)
+    append_csv_backup(MEASUREMENTS_FILE, ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"], row)
 
 
 def latest_measurements():
@@ -943,19 +998,20 @@ def latest_measurements():
 
 
 def load_physique_ratings():
-    return load_csv(
-        PHYSIQUE_RATING_FILE,
-        [
-            "date", "physique_score", "leanness_score", "symmetry_score",
-            "muscularity_score", "confidence", "weak_points", "improvements",
-            "summary", "timestamp"
-        ]
-    )
+    columns = ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"]
+    return df_from_supabase("physique_ratings", PHYSIQUE_RATING_FILE, columns)
 
 
 def save_physique_rating(row):
-    df = load_physique_ratings()
-    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(PHYSIQUE_RATING_FILE, index=False)
+    sb_row = row.copy()
+    for key in ["weak_points", "improvements"]:
+        try:
+            if isinstance(sb_row.get(key), str):
+                sb_row[key] = json.loads(sb_row[key])
+        except Exception:
+            pass
+    sb_insert("physique_ratings", sb_row)
+    append_csv_backup(PHYSIQUE_RATING_FILE, ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"], row)
 
 
 def encode_uploaded_image(uploaded_file):
@@ -1145,20 +1201,17 @@ def save_ai_custom_plan(ai_plan):
     rows = []
     for day in ai_plan.get("days", []):
         for ex in day.get("exercises", []):
-            rows.append({
-                "workout": day.get("day", ""),
-                "exercise": ex.get("exercise", ""),
-                "sets": ex.get("sets", ""),
-                "reps": ex.get("reps", ""),
-                "reason": ex.get("reason", ""),
-                "day_goal": day.get("goal", ""),
-                "plan_name": ai_plan.get("plan_name", "AI Custom Plan"),
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-            })
-
+            exercise_name = ex.get("exercise", "")
+            rows.append({"workout": day.get("day", ""), "exercise": exercise_name, "sets": ex.get("sets", ""), "reps": ex.get("reps", ""), "muscle": infer_muscle_group(exercise_name) if "infer_muscle_group" in globals() else "", "reason": ex.get("reason", ""), "day_goal": day.get("goal", ""), "plan_name": ai_plan.get("plan_name", "AI Custom Plan"), "timestamp": datetime.now().isoformat(timespec="seconds")})
     if not rows:
         return False
-
+    sb = get_supabase_client()
+    if sb is not None:
+        try:
+            sb.table("custom_workout_plan").delete().neq("exercise", "__never_match__").execute()
+            sb.table("custom_workout_plan").insert(rows).execute()
+        except Exception:
+            pass
     pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
     return True
 
@@ -1167,18 +1220,15 @@ def save_fallback_custom_plan(plan):
     rows = []
     for workout, exercises in plan.items():
         for exercise, sets, reps in exercises:
-            rows.append({
-                "workout": workout,
-                "exercise": exercise,
-                "sets": sets,
-                "reps": reps,
-                "reason": "Fallback weak-point aesthetic plan",
-                "day_goal": "Aesthetic development",
-                "plan_name": "Fallback Aesthetic Weakpoint Plan",
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-            })
+            rows.append({"workout": workout, "exercise": exercise, "sets": sets, "reps": reps, "muscle": infer_muscle_group(exercise) if "infer_muscle_group" in globals() else "", "reason": "Fallback weak-point aesthetic plan", "day_goal": "Aesthetic development", "plan_name": "Fallback Aesthetic Weakpoint Plan", "timestamp": datetime.now().isoformat(timespec="seconds")})
+    sb = get_supabase_client()
+    if sb is not None:
+        try:
+            sb.table("custom_workout_plan").delete().neq("exercise", "__never_match__").execute()
+            sb.table("custom_workout_plan").insert(rows).execute()
+        except Exception:
+            pass
     pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
-
 
 
 def generate_custom_plan_from_data(weak_points=None, priorities=None, goal="Aesthetic / lean bulk"):
@@ -1265,16 +1315,13 @@ def save_custom_plan(plan):
 
 
 def load_custom_plan():
-    return load_csv(CUSTOM_PLAN_FILE, ["workout", "exercise", "sets", "reps", "reason", "day_goal", "plan_name", "timestamp"])
-
+    columns = ["workout", "exercise", "sets", "reps", "reason", "day_goal", "plan_name", "timestamp"]
+    return df_from_supabase("custom_workout_plan", CUSTOM_PLAN_FILE, columns)
 
 
 def save_bodyfat_estimate(row):
-    """
-    Saves one body fat estimate row to bodyfat_log.csv.
-    """
-    df = load_bodyfat_log()
-    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(BODYFAT_FILE, index=False)
+    sb_insert("bodyfat_log", row)
+    append_csv_backup(BODYFAT_FILE, ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"], row)
 
 
 def bodyfat_outputs(weight_kg, bf_percent, target_bf=10.0):
@@ -1422,13 +1469,8 @@ def navy_body_fat_male(height_cm, waist_cm, neck_cm):
         return None
 
 def load_bodyfat_log():
-    return load_csv(
-        BODYFAT_FILE,
-        [
-            "date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm",
-            "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"
-        ]
-    )
+    columns = ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"]
+    return df_from_supabase("bodyfat_log", BODYFAT_FILE, columns)
 
 
 def get_bodyfat_stats():
@@ -1447,7 +1489,7 @@ def get_bodyfat_stats():
 
 
 def get_cardio_stats():
-    cardio = load_csv(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"])
+    cardio = load_cardio_log()
     if cardio.empty:
         return {"minutes": 0, "distance": 0, "count": 0, "types": set()}
     cardio["minutes"] = pd.to_numeric(cardio.get("minutes", 0), errors="coerce").fillna(0)
@@ -1666,7 +1708,7 @@ def get_target(target_type, name):
 
 
 def latest_bodyweight_value():
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     if bw_df.empty:
         return None
     bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
@@ -2061,7 +2103,7 @@ def get_target(target_type, name):
 
 
 def latest_bodyweight_value():
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     if bw_df.empty:
         return None
     bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
@@ -2476,9 +2518,9 @@ div[data-testid="stMetric"] { background: rgba(15,23,42,.65); border: 1px solid 
 
 st.markdown("""
 <div class="nw-hero">
-    <div class="nw-hero-title">⚡Training System</div>
-    <div class="nw-hero-sub">PPPPLA tracker</div>
-    <span class="nw-badge">Push • Pull • Legs • Aesthetics • Recovery</span>
+    <div class="nw-hero-title">⚡ Tyson Training</div>
+    <div class="nw-hero-sub">Nightwing-inspired PPPPLA tracker</div>
+    <span class="nw-badge">Bench Strength • V-Taper • Delts • Cardio • XP System</span>
     <div class="nw-scanline"></div>
 </div>
 """, unsafe_allow_html=True)
@@ -2905,7 +2947,7 @@ elif page == "Today":
 
 elif page == "Cardio":
     st.header("Cardio Tracker")
-    cardio = load_csv(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"])
+    cardio = load_cardio_log()
     c_date = st.date_input("Date", value=date.today())
     c_type = st.selectbox("Type", ["Treadmill incline walk", "Outdoor walk", "Run", "Bike", "Stairmaster", "Boxing", "Other"])
     col1, col2 = st.columns(2)
@@ -3082,7 +3124,7 @@ elif page == "Body Fat":
     mode = st.radio("Estimate method", ["Measurement estimate", "AI photo estimate", "Combined estimate"], horizontal=True)
 
     latest_bw = 0.0
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     if not bw_df.empty:
         bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
         latest_bw = float(bw_df.iloc[-1]["bodyweight"])
@@ -3290,7 +3332,7 @@ elif page == "Body Fat":
 
 elif page == "Bodyweight":
     st.header("Bodyweight")
-    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    bw_df = load_bodyweight_log()
     bw_date = st.date_input("Date", value=date.today())
     bw = st.number_input("Bodyweight kg", min_value=0.0, step=0.1)
     if st.button("Save Bodyweight", type="primary"):
@@ -3309,7 +3351,13 @@ elif page == "Bodyweight":
 
 elif page == "Data Manager":
     st.header("📂 Data Manager")
-    st.info("Download backups of your workout data from the server the app is currently running on. This is especially important on Streamlit Cloud because files can disappear after redeploys/restarts.")
+    st.info("Download backups of your workout data. Supabase is used first when connected, with CSV as backup.")
+
+    st.subheader("Supabase Status")
+    if supabase_enabled():
+        st.success("Supabase connected — data loads/saves to cloud database first.")
+    else:
+        st.warning("Supabase not connected — using CSV files only.")
 
     csv_files = [
         "workout_log.csv",
@@ -3449,6 +3497,45 @@ elif page == "Data Manager":
                 st.rerun()
 
     st.divider()
+
+
+    st.divider()
+    st.subheader("CSV → Supabase Migration")
+    st.caption("Use this once if you already have CSV data and want to push it into Supabase.")
+    if st.button("Upload Existing CSV Backups to Supabase", type="secondary"):
+        if not supabase_enabled():
+            st.error("Supabase is not connected.")
+        else:
+            migration_map = {
+                "workout_log.csv": "workout_log",
+                "bodyweight_log.csv": "bodyweight_log",
+                "bodyfat_log.csv": "bodyfat_log",
+                "measurements.csv": "measurements",
+                "physique_ratings.csv": "physique_ratings",
+                "custom_workout_plan.csv": "custom_workout_plan",
+                "targets.csv": "targets",
+                "achievements.csv": "achievements",
+                "cardio_log.csv": "cardio_log",
+                "profile.csv": "profile",
+            }
+            migrated = []
+            for file, table in migration_map.items():
+                path = Path(file)
+                if not path.exists():
+                    continue
+                try:
+                    df_mig = pd.read_csv(path)
+                    if df_mig.empty:
+                        continue
+                    records = df_mig.where(pd.notnull(df_mig), None).to_dict(orient="records")
+                    get_supabase_client().table(table).insert(records).execute()
+                    migrated.append(f"{file} → {table} ({len(records)} rows)")
+                except Exception as e:
+                    st.warning(f"Could not migrate {file}: {e}")
+            if migrated:
+                st.success("Migrated: " + " | ".join(migrated))
+            else:
+                st.info("No CSV rows found to migrate.")
 
     st.subheader("Quick Preview")
     preview_file = st.selectbox("Preview CSV", csv_files)
