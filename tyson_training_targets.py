@@ -59,7 +59,16 @@ SUPABASE_TABLE_SCHEMAS = {
 }
 
 
-def clean_supabase_value(v):
+def is_bad_number(v):
+    try:
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def json_safe_value(v):
     try:
         if pd.isna(v):
             return None
@@ -75,34 +84,57 @@ def clean_supabase_value(v):
     if isinstance(v, (pd.Timestamp, datetime, date)):
         return str(v)
 
-    if isinstance(v, (list, dict, str, int, float, bool)) or v is None:
-        return v
+    if is_bad_number(v):
+        return None
 
-    try:
-        return float(v)
-    except Exception:
-        return str(v)
+    if isinstance(v, dict):
+        return {str(k): json_safe_value(val) for k, val in v.items() if json_safe_value(val) is not None}
+
+    if isinstance(v, list):
+        return [json_safe_value(x) for x in v if json_safe_value(x) is not None]
+
+    return v
+
+
+def json_safe_record(record):
+    clean = {}
+    for k, v in dict(record).items():
+        safe_v = json_safe_value(v)
+        if safe_v is not None:
+            clean[k] = safe_v
+    return clean
+
+
+def json_safe_records(records):
+    return [json_safe_record(r) for r in records]
+
+
+
+def clean_supabase_value(v):
+    return json_safe_value(v)
 
 
 
 def clean_supabase_row(row, table_name):
     allowed = SUPABASE_TABLE_SCHEMAS.get(table_name, list(row.keys()))
-    clean = {}
+    filtered = {}
+
     for k in allowed:
         if k not in row:
             continue
-        v = clean_supabase_value(row.get(k))
-        if v is None:
-            continue
-        clean[k] = v
+        filtered[k] = row.get(k)
 
+    clean = json_safe_record(filtered)
+
+    # jsonb columns: accept stringified JSON or Python lists
     if table_name == "physique_ratings":
         for key in ["weak_points", "improvements"]:
             if isinstance(clean.get(key), str):
                 try:
                     clean[key] = json.loads(clean[key])
                 except Exception:
-                    pass
+                    # Keep as a simple list if Supabase jsonb rejects string
+                    clean[key] = [clean[key]]
 
     return clean
 
@@ -145,9 +177,10 @@ def sb_insert(table_name, row, show_error=False):
         if show_error:
             st.error(f"❌ Insert failed: {table_name}")
             st.code(msg)
-            st.write("Attempted row:")
+            st.write("Attempted JSON-safe row:")
             st.json(clean)
         return False, msg
+
 
 
 def sb_delete_matching(table_name, filters):
@@ -632,15 +665,29 @@ def save_bodyweight_row(row):
     save_csv_backup(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"], row=row)
 
 
+def safe_float(value, default=0.0):
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str) and value.strip() == "":
+            return default
+        value = float(value)
+        if math.isnan(value) or math.isinf(value):
+            return default
+        return value
+    except Exception:
+        return default
+
+
 def save_cardio_row(row):
     clean_row = {
         "date": str(row.get("date", date.today())),
-        "type": str(row.get("type", row.get("cardio_type", ""))),
-        "minutes": float(row.get("minutes", 0) or 0),
-        "distance_km": float(row.get("distance_km", 0) or 0),
-        "incline": float(row.get("incline", 0) or 0),
-        "speed": float(row.get("speed", 0) or 0),
-        "calories": float(row.get("calories", 0) or 0),
+        "type": str(row.get("type", row.get("cardio_type", "")) or ""),
+        "minutes": safe_float(row.get("minutes", 0)),
+        "distance_km": safe_float(row.get("distance_km", 0)),
+        "incline": safe_float(row.get("incline", 0)),
+        "speed": safe_float(row.get("speed", 0)),
+        "calories": safe_float(row.get("calories", 0)),
         "notes": str(row.get("notes", "") or ""),
         "timestamp": str(row.get("timestamp", datetime.now().isoformat(timespec="seconds"))),
     }
@@ -3866,7 +3913,9 @@ elif page == "Data Manager":
                     df_mig = pd.read_csv(path)
                     if df_mig.empty:
                         continue
-                    records = df_mig.where(pd.notnull(df_mig), None).to_dict(orient="records")
+                    df_mig = df_mig.replace([float("inf"), float("-inf")], None)
+                    df_mig = df_mig.where(pd.notnull(df_mig), None)
+                    records = json_safe_records(df_mig.to_dict(orient="records"))
                     get_supabase_client().table(table).insert(records).execute()
                     migrated.append(f"{file} → {table} ({len(records)} rows)")
                 except Exception as e:
