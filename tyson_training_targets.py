@@ -737,7 +737,25 @@ def load_log():
 
 
 def load_achievements():
-    return df_from_supabase("achievements", ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"])
+    df = df_from_supabase("achievements", ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"])
+
+    if df.empty:
+        return df
+
+    for col in ["achievement_id", "name", "description", "date_unlocked"]:
+        if col not in df.columns:
+            df[col] = ""
+
+    df["achievement_id"] = df["achievement_id"].astype(str)
+
+    # Migration/testing can create duplicate achievement rows.
+    # Keep only one row per achievement_id so Command Centre counter is correct.
+    if "date_unlocked" in df.columns:
+        df = df.sort_values("date_unlocked", ascending=True)
+
+    df = df.drop_duplicates(subset=["achievement_id"], keep="last").reset_index(drop=True)
+
+    return df[["achievement_id", "name", "description", "date_unlocked"]]
 
 
 
@@ -757,6 +775,13 @@ def save_achievement(achievement_id):
     save_csv_backup(ACHIEVEMENT_FILE, ["achievement_id", "name", "description", "date_unlocked"], row=row)
     return True
 
+
+
+def achievement_count():
+    ach = load_achievements()
+    if ach.empty or "achievement_id" not in ach.columns:
+        return 0
+    return ach["achievement_id"].astype(str).nunique()
 
 
 def estimated_1rm(weight, reps):
@@ -2937,7 +2962,7 @@ if page == "Home":
     if ach.empty:
         st.info("No achievements unlocked yet. Open the Achievements tab to check requirements.")
     else:
-        st.metric("Achievements", f"{len(ach)}/{len(ACHIEVEMENTS)}")
+        st.metric("Achievements", f"{achievement_count()}/{len(ACHIEVEMENTS)}")
         for _, row in ach.sort_values("date_unlocked", ascending=False).head(5).iterrows():
             st.markdown(f"""<div class="dashboard-card"><div class="nw-card-title">{row['name']}</div><div class="nw-small">{row['description']}</div></div>""", unsafe_allow_html=True)
         st.caption("Open the Achievements tab to view all locked/unlocked achievements.")
@@ -3401,7 +3426,7 @@ elif page == "Achievements":
         st.rerun()
 
     ach = load_achievements()
-    unlocked_ids = set(ach["achievement_id"].astype(str).tolist()) if not ach.empty else set()
+    unlocked_ids = set(ach["achievement_id"].astype(str).dropna().tolist()) if not ach.empty else set()
 
     st.metric("Unlocked", f"{len(unlocked_ids)}/{len(ACHIEVEMENTS)}")
 
@@ -3691,6 +3716,17 @@ elif page == "Data Manager":
         "cardio_log.csv",
         "profile.csv",
     ]
+
+    
+    st.subheader("Achievement Counter Fix")
+    st.caption("If the achievement counter looks wrong after CSV/Supabase migration, this removes duplicate achievement IDs from the local CSV view. Supabase reads will also be de-duplicated automatically.")
+
+    if st.button("Rebuild Achievement Counter", type="secondary"):
+        ach_fix = load_achievements()
+        ach_fix.to_csv(ACHIEVEMENT_FILE, index=False)
+        st.success(f"Achievement counter rebuilt: {achievement_count()}/{len(ACHIEVEMENTS)} unlocked.")
+        st.rerun()
+
 
     st.subheader("Supabase Diagnostics")
     if supabase_enabled():
