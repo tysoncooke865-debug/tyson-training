@@ -3283,7 +3283,8 @@ df = load_log()
 check_achievements()
 
 if page == "Home":
-    page_hero("Command Centre", "Your daily training cockpit — strength, progress, rank and system status.", f"Level {summary['level']}")
+    page_hero("Command Centre", "Your daily training cockpit — strength, progress, rank and system status.", "Command OS")
+    summary = workout_summary(df)
     st.markdown("### Snapshot")
     m1, m2, m3, m4 = st.columns(4)
     with m1:
@@ -3295,7 +3296,6 @@ if page == "Home":
     with m4:
         compact_metric("Achievements", f'{achievement_count()}/{len(ACHIEVEMENTS)}', "unique unlocks")
 
-    summary = workout_summary(df)
     xp_percent = min((summary["xp_into_level"] / summary["xp_needed"]) * 100, 100)
     bench_percent = min((summary["best_bench_1rm"] / 100) * 100, 100)
 
