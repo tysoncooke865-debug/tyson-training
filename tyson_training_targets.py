@@ -48,7 +48,7 @@ def supabase_enabled():
 SUPABASE_TABLE_SCHEMAS = {
     "workout_log": ["date", "workout", "exercise", "muscle", "set", "weight", "reps", "estimated_1rm", "volume", "notes", "timestamp"],
     "bodyweight_log": ["date", "bodyweight", "timestamp"],
-    "cardio_log": ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"],
+    "cardio_log": ["date", "type", "cardio_type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"],
     "bodyfat_log": ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"],
     "measurements": ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"],
     "physique_ratings": ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"],
@@ -75,7 +75,14 @@ def clean_supabase_value(v):
     if isinstance(v, (pd.Timestamp, datetime, date)):
         return str(v)
 
-    return v
+    if isinstance(v, (list, dict, str, int, float, bool)) or v is None:
+        return v
+
+    try:
+        return float(v)
+    except Exception:
+        return str(v)
+
 
 
 def clean_supabase_row(row, table_name):
@@ -84,19 +91,21 @@ def clean_supabase_row(row, table_name):
     for k in allowed:
         if k not in row:
             continue
-        clean[k] = clean_supabase_value(row.get(k))
+        v = clean_supabase_value(row.get(k))
+        if v is None:
+            continue
+        clean[k] = v
 
-    # jsonb columns: accept stringified JSON or Python lists
     if table_name == "physique_ratings":
         for key in ["weak_points", "improvements"]:
             if isinstance(clean.get(key), str):
                 try:
                     clean[key] = json.loads(clean[key])
                 except Exception:
-                    # Keep string if it is not JSON; diagnostic will reveal if table rejects it
                     pass
 
     return clean
+
 
 
 def sb_select(table_name):
@@ -624,18 +633,54 @@ def save_bodyweight_row(row):
 
 
 def save_cardio_row(row):
-    ok, err = sb_insert("cardio_log", row)
+    clean_row = {
+        "date": str(row.get("date", date.today())),
+        "type": str(row.get("type", row.get("cardio_type", ""))),
+        "minutes": float(row.get("minutes", 0) or 0),
+        "distance_km": float(row.get("distance_km", 0) or 0),
+        "incline": float(row.get("incline", 0) or 0),
+        "speed": float(row.get("speed", 0) or 0),
+        "calories": float(row.get("calories", 0) or 0),
+        "notes": str(row.get("notes", "") or ""),
+        "timestamp": str(row.get("timestamp", datetime.now().isoformat(timespec="seconds"))),
+    }
+
+    ok, err = sb_insert("cardio_log", clean_row)
+
+    # If your Supabase table uses cardio_type instead of type, retry automatically.
+    if not ok and ("type" in str(err).lower() or "column" in str(err).lower() or "schema cache" in str(err).lower()):
+        retry_row = clean_row.copy()
+        retry_row["cardio_type"] = retry_row.pop("type")
+        ok, err = sb_insert("cardio_log", retry_row)
+
     store_supabase_result("cardio_log", ok, err)
-    save_csv_backup(CARDIO_FILE, ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"], row=row)
+    save_csv_backup(
+        CARDIO_FILE,
+        ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"],
+        row=clean_row
+    )
+
 
 
 def normalise_workout_log(df):
     if "set" not in df.columns and "set_number" in df.columns:
         df = df.rename(columns={"set_number": "set"})
+
     for col in ["date", "workout", "exercise", "set", "weight", "reps", "timestamp"]:
         if col not in df.columns:
             df[col] = ""
+
+    df["set"] = pd.to_numeric(df["set"], errors="coerce").fillna(0).astype(int)
+
+    if not df.empty:
+        df = df.sort_values("timestamp", ascending=True)
+        df = df.drop_duplicates(
+            subset=["date", "workout", "exercise", "set"],
+            keep="last"
+        ).reset_index(drop=True)
+
     return df
+
 
 
 def load_log():
@@ -720,9 +765,11 @@ def completed_sets_for_day(df, workout_date, workout):
     today = df[(df["date"].astype(str) == str(workout_date)) & (df["workout"].astype(str) == str(workout))]
     if today.empty:
         return 0
+    today = today.drop_duplicates(subset=["date", "workout", "exercise", "set"], keep="last")
     today["weight"] = pd.to_numeric(today["weight"], errors="coerce").fillna(0)
     today["reps"] = pd.to_numeric(today["reps"], errors="coerce").fillna(0)
     return len(today[(today["weight"] > 0) & (today["reps"] > 0)])
+
 
 
 def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
@@ -1018,12 +1065,17 @@ def workout_summary(df):
             "xp": 0, "level": get_base_level(), "rank": rank_name(get_base_level()), "base_level": get_base_level(),
             "xp_into_level": 0, "xp_needed": 500
         }
+
     df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0)
     df["reps"] = pd.to_numeric(df["reps"], errors="coerce").fillna(0)
-    total_sets = len(df[(df["weight"] > 0) & (df["reps"] > 0)])
-    total_reps = int(df["reps"].sum())
 
-    bench = df[df["exercise"] == "Barbell Bench Press (Strength)"].copy()
+    valid_sets = df[(df["weight"] > 0) & (df["reps"] > 0)].copy()
+    valid_sets = valid_sets.drop_duplicates(subset=["date", "workout", "exercise", "set"], keep="last")
+
+    total_sets = len(valid_sets)
+    total_reps = int(valid_sets["reps"].sum()) if not valid_sets.empty else 0
+
+    bench = valid_sets[valid_sets["exercise"] == "Barbell Bench Press (Strength)"].copy()
     if not bench.empty:
         bench["estimated_1rm"] = bench.apply(lambda x: estimated_1rm(float(x["weight"]), int(x["reps"])), axis=1)
         best_bench_1rm = float(bench["estimated_1rm"].max())
@@ -1031,8 +1083,12 @@ def workout_summary(df):
         best_bench_1rm = 0
 
     cardio = load_cardio_log()
-    cardio["minutes"] = pd.to_numeric(cardio.get("minutes", 0), errors="coerce").fillna(0)
-    cardio_minutes = float(cardio["minutes"].sum()) if not cardio.empty else 0
+    if not cardio.empty:
+        cardio = cardio.drop_duplicates(subset=[c for c in ["date", "type", "cardio_type", "minutes", "distance_km", "timestamp"] if c in cardio.columns], keep="last")
+        cardio["minutes"] = pd.to_numeric(cardio.get("minutes", 0), errors="coerce").fillna(0)
+        cardio_minutes = float(cardio["minutes"].sum())
+    else:
+        cardio_minutes = 0
 
     xp = int(total_sets * 10 + cardio_minutes * 2)
     base_level = get_base_level()
@@ -1051,6 +1107,7 @@ def workout_summary(df):
         "latest_bw": latest_bw, "xp": xp, "level": level, "rank": rank_name(level), "base_level": base_level,
         "xp_into_level": xp_into_level, "xp_needed": 500
     }
+
 
 
 def infer_muscle_group(exercise):
@@ -1117,6 +1174,7 @@ def muscle_heat_map(df):
     df = df[(df["weight"] > 0) & (df["reps"] > 0)]
     if df.empty:
         return pd.DataFrame(columns=["muscle", "sets"])
+    df = df.drop_duplicates(subset=["date", "workout", "exercise", "set"], keep="last")
     df["muscle"] = df["exercise"].apply(infer_muscle_group)
     return (
         df.groupby("muscle", as_index=False)
@@ -1124,6 +1182,8 @@ def muscle_heat_map(df):
         .rename(columns={"size": "sets"})
         .sort_values("sets", ascending=False)
     )
+
+
 
 def unique_training_days(df):
     if df.empty or "date" not in df.columns:
@@ -3625,6 +3685,24 @@ elif page == "Data Manager":
                 st.write(f"Rows found in Supabase {selected_test_table}: {len(data)}")
                 if data:
                     st.dataframe(pd.DataFrame(data).tail(10), use_container_width=True)
+
+    if st.button("Test Cardio Insert With type/cardio_type Fallback"):
+        test_cardio = {
+            "date": str(date.today()),
+            "type": "Test",
+            "minutes": 1.0,
+            "distance_km": 0.1,
+            "incline": 0.0,
+            "speed": 1.0,
+            "calories": 1.0,
+            "notes": "cardio fallback test",
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        }
+        save_cardio_row(test_cardio)
+        if st.session_state.get("last_supabase_error"):
+            st.error(st.session_state.get("last_supabase_error"))
+        else:
+            st.success("Cardio insert worked.")
 
     if st.button("Run All Supabase Insert Tests"):
         results = []
