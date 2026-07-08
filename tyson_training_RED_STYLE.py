@@ -3247,7 +3247,7 @@ def render_onboarding_screen():
     st.markdown("""
     <div class="onboarding-shell">
         <div class="onboarding-badge">PROFILE CALIBRATION</div>
-        <div class="onboarding-title">Set up Tyson Training</div>
+        <div class="onboarding-title">Set up Training</div>
         <div class="onboarding-subtitle">
             Existing workout, bodyweight, body fat and PR data has been detected and pre-filled.
             Confirm it once so levels, avatar stats and AI coaching are calibrated properly.
@@ -3778,7 +3778,7 @@ st.sidebar.markdown("""
 <div class="side-brand">
     <div class="side-logo">⚡</div>
     <div>
-        <div class="side-title">TYSON TRAINING</div>
+        <div class="side-title">TRAINING SYSTEM</div>
         <div class="side-sub">iOS Fitness OS</div>
     </div>
 </div>
@@ -4352,7 +4352,7 @@ elif page == "Avatar":
             <div class="avatar-main">
                 <div class="avatar-sigil">🧬</div>
                 <div>
-                    <div class="avatar-name">TYSON</div>
+                    <div class="avatar-name">JESSE</div>
                     <div class="avatar-class">{stats['character_class']}</div>
                     <div class="avatar-rank">{stage} • Level {stats['level']}</div>
                 </div>
