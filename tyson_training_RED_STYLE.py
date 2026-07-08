@@ -7,7 +7,7 @@ import base64
 import json
 import math
 
-APP_TITLE = "Tyson Training"
+APP_TITLE = "Jesse Training"
 LOG_FILE = Path("workout_log.csv")
 BODYWEIGHT_FILE = Path("bodyweight_log.csv")
 CARDIO_FILE = Path("cardio_log.csv")
@@ -1932,9 +1932,9 @@ div[data-testid="stMetric"] { background: rgba(15,23,42,.65); border: 1px solid 
 
 st.markdown("""
 <div class="nw-hero">
-    <div class="nw-hero-title">⚡ Tyson Training</div>
-    <div class="nw-hero-sub">Nightwing-inspired PPPPLA tracker</div>
-    <span class="nw-badge">Bench Strength • V-Taper • Delts • Cardio • XP System</span>
+    <div class="nw-hero-title">⚡ Training System</div>
+    <div class="nw-hero-sub">PPPPLA tracker</div>
+    <span class="nw-badge">Push • Pull • Legs • Aesthetics • Recovery</span>
     <div class="nw-scanline"></div>
 </div>
 """, unsafe_allow_html=True)
