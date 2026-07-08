@@ -6,6 +6,8 @@ import os
 import base64
 import json
 import math
+import zipfile
+from io import BytesIO
 
 APP_TITLE = "Tyson Training"
 LOG_FILE = Path("workout_log.csv")
@@ -227,31 +229,90 @@ FALLBACK_AESTHETIC_PLAN = {
 }
 
 MUSCLE_MAP = {
+    # Chest / pressing
     "Barbell Bench Press (Strength)": "Chest",
+    "Barbell Bench Press": "Chest",
     "Paused Barbell Bench Press": "Chest",
     "Dumbbell Flat Bench Press": "Chest",
+    "Machine Chest Press": "Chest",
+    "Incline Barbell Bench Press": "Upper Chest",
+    "Incline Dumbbell Bench Press": "Upper Chest",
+    "Incline Smith Machine Press": "Upper Chest",
+    "Incline Machine Chest Press": "Upper Chest",
     "Pec Deck Machine Fly": "Chest",
+    "Cable Chest Fly": "Chest",
+    "Low-to-High Cable Fly": "Upper Chest",
     "Decline Push-Up": "Chest",
-    "Cable Lateral Raise": "Delts",
-    "Dumbbell Lateral Raise": "Delts",
+    "Machine Dip": "Triceps",
+
+    # Delts / shoulders
+    "Cable Lateral Raise": "Side Delts",
+    "Dumbbell Lateral Raise": "Side Delts",
+    "Machine Lateral Raise": "Side Delts",
+    "Lean-Away Cable Lateral Raise": "Side Delts",
+    "Behind-the-Back Cable Lateral Raise": "Side Delts",
     "Reverse Pec Deck (Rear Delt Fly)": "Rear Delts",
+    "Cable Rear Delt Fly": "Rear Delts",
     "Face Pull": "Rear Delts",
-    "Cable Triceps Pushdown": "Triceps",
-    "Lat Pulldown": "Back",
-    "Cable Lat Pullover (Straight-Arm Pulldown)": "Back",
-    "Chest-Supported Machine Row": "Back",
-    "Chest-Supported Dumbbell Row": "Back",
+    "Chest-Supported Rear Delt Row": "Rear Delts",
+
+    # Back
+    "Lat Pulldown": "Back Width",
+    "Neutral-Grip Lat Pulldown": "Back Width",
+    "Assisted Pull-Up": "Back Width",
+    "Cable Lat Pullover (Straight-Arm Pulldown)": "Back Width",
+    "Single-Arm Cable Lat Pulldown": "Back Width",
+    "Chest-Supported Machine Row": "Back Thickness",
+    "Chest-Supported Dumbbell Row": "Back Thickness",
+    "Seated Cable Row": "Back Thickness",
+    "T-Bar Row": "Back Thickness",
+    "Machine High Row": "Back Thickness",
+
+    # Biceps / forearms
     "EZ-Bar Curl": "Biceps",
     "Dumbbell Biceps Curl": "Biceps",
-    "Barbell Back Squat": "Legs",
-    "Hack Squat Machine": "Legs",
-    "Seated/Lying Leg Curl": "Legs",
-    "Leg Extension": "Legs",
+    "Incline Dumbbell Curl": "Biceps",
+    "Cable Curl": "Biceps",
+    "Preacher Curl Machine": "Biceps",
+    "Hammer Curl": "Biceps",
+    "Reverse Curl": "Forearms",
+    "Wrist Curl": "Forearms",
+    "Cable Wrist Curl": "Forearms",
+    "Farmer Carry": "Forearms",
+
+    # Triceps
+    "Cable Triceps Pushdown": "Triceps",
+    "Overhead Cable Triceps Extension": "Triceps",
+    "Close-Grip Bench Press": "Triceps",
+    "Single-Arm Cable Triceps Extension": "Triceps",
+
+    # Legs
+    "Barbell Back Squat": "Quads",
+    "Hack Squat Machine": "Quads",
+    "Leg Press": "Quads",
+    "Bulgarian Split Squat": "Quads",
+    "Leg Extension": "Quads",
+    "Smith Machine Squat": "Quads",
+    "Seated/Lying Leg Curl": "Hamstrings",
+    "Romanian Deadlift": "Hamstrings",
+    "Seated Leg Curl": "Hamstrings",
+    "Lying Leg Curl": "Hamstrings",
+    "Back Extension": "Hamstrings",
+    "Hip Adduction Machine": "Adductors",
+    "Hip Abduction Machine": "Glutes",
+    "Cable Kickback": "Glutes",
+    "Hip Thrust Machine": "Glutes",
     "Seated Calf Raise": "Calves",
-    "Hip Adduction Machine": "Legs",
+    "Standing Calf Raise": "Calves",
+    "Leg Press Calf Raise": "Calves",
+
+    # Abs
     "Machine Ab Crunch": "Abs",
     "Lying Leg Raise": "Abs",
+    "Hanging Knee Raise": "Abs",
+    "Cable Crunch": "Abs",
     "Weighted Sit-Up": "Abs",
+    "Decline Sit-Up": "Abs",
 }
 
 ACHIEVEMENTS = {
@@ -744,6 +805,61 @@ def workout_summary(df):
     }
 
 
+def infer_muscle_group(exercise):
+    name = str(exercise).strip()
+    if name in MUSCLE_MAP:
+        return MUSCLE_MAP[name]
+
+    lower = name.lower()
+
+    if any(x in lower for x in ["incline", "upper chest", "low-to-high"]):
+        if any(x in lower for x in ["press", "bench", "fly", "chest"]):
+            return "Upper Chest"
+
+    if any(x in lower for x in ["bench", "pec", "chest", "fly", "push-up", "push up"]):
+        return "Chest"
+
+    if any(x in lower for x in ["lateral raise", "side delt", "machine lateral", "lean-away"]):
+        return "Side Delts"
+
+    if any(x in lower for x in ["rear delt", "reverse pec", "face pull"]):
+        return "Rear Delts"
+
+    if any(x in lower for x in ["pulldown", "pull-up", "pull up", "lat pullover", "straight-arm", "straight arm", "lat"]):
+        return "Back Width"
+
+    if any(x in lower for x in ["row", "t-bar", "machine high row", "high row"]):
+        return "Back Thickness"
+
+    if any(x in lower for x in ["curl", "bicep", "preacher", "hammer"]):
+        if any(x in lower for x in ["wrist", "reverse", "farmer"]):
+            return "Forearms"
+        return "Biceps"
+
+    if any(x in lower for x in ["tricep", "pushdown", "overhead extension", "close-grip", "dip"]):
+        return "Triceps"
+
+    if any(x in lower for x in ["squat", "leg press", "leg extension", "quad", "bulgarian"]):
+        return "Quads"
+
+    if any(x in lower for x in ["leg curl", "hamstring", "romanian", "rdl", "back extension"]):
+        return "Hamstrings"
+
+    if "calf" in lower:
+        return "Calves"
+
+    if any(x in lower for x in ["adduction", "adductor"]):
+        return "Adductors"
+
+    if any(x in lower for x in ["abduction", "kickback", "hip thrust", "glute"]):
+        return "Glutes"
+
+    if any(x in lower for x in ["crunch", "sit-up", "sit up", "leg raise", "knee raise", "abs"]):
+        return "Abs"
+
+    return "Other"
+
+
 def muscle_heat_map(df):
     df = normalise_workout_log(df.copy())
     if df.empty:
@@ -751,10 +867,15 @@ def muscle_heat_map(df):
     df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0)
     df["reps"] = pd.to_numeric(df["reps"], errors="coerce").fillna(0)
     df = df[(df["weight"] > 0) & (df["reps"] > 0)]
-    df["muscle"] = df["exercise"].map(MUSCLE_MAP).fillna("Other")
-    return df.groupby("muscle", as_index=False).size().rename(columns={"size": "sets"}).sort_values("sets", ascending=False)
-
-
+    if df.empty:
+        return pd.DataFrame(columns=["muscle", "sets"])
+    df["muscle"] = df["exercise"].apply(infer_muscle_group)
+    return (
+        df.groupby("muscle", as_index=False)
+        .size()
+        .rename(columns={"size": "sets"})
+        .sort_values("sets", ascending=False)
+    )
 
 def unique_training_days(df):
     if df.empty or "date" not in df.columns:
@@ -1446,15 +1567,15 @@ def check_achievements():
     if "Boxing" in cardio["types"]: unlock("boxing_logged")
 
     # Muscle heat map / volume
-    if muscle_sets_count(heat, ["Chest"]) >= 50: unlock("chest_50")
-    if muscle_sets_count(heat, ["Chest"]) >= 150: unlock("chest_150")
-    if muscle_sets_count(heat, ["Back"]) >= 50: unlock("back_50")
-    if muscle_sets_count(heat, ["Back"]) >= 150: unlock("back_150")
-    delt_sets = muscle_sets_count(heat, ["Delts", "Rear Delts"])
+    if muscle_sets_count(heat, ["Chest", "Upper Chest"]) >= 50: unlock("chest_50")
+    if muscle_sets_count(heat, ["Chest", "Upper Chest"]) >= 150: unlock("chest_150")
+    if muscle_sets_count(heat, ["Back", "Back Width", "Back Thickness"]) >= 50: unlock("back_50")
+    if muscle_sets_count(heat, ["Back", "Back Width", "Back Thickness"]) >= 150: unlock("back_150")
+    delt_sets = muscle_sets_count(heat, ["Delts", "Side Delts", "Rear Delts"])
     if delt_sets >= 50: unlock("delts_50")
     if delt_sets >= 150: unlock("delts_150")
     if muscle_sets_count(heat, ["Biceps", "Triceps"]) >= 100: unlock("arms_100")
-    if muscle_sets_count(heat, ["Legs", "Calves"]) >= 100: unlock("legs_100")
+    if muscle_sets_count(heat, ["Legs", "Quads", "Hamstrings", "Glutes", "Adductors", "Calves"]) >= 100: unlock("legs_100")
     if muscle_sets_count(heat, ["Abs"]) >= 50: unlock("abs_50")
 
     # Rank achievements
@@ -1856,6 +1977,429 @@ Return ONLY valid JSON:
     except Exception as e:
         return None, f"AI custom plan failed: {e}"
 
+
+# ============================================================
+# FINAL SAFETY HELPERS — DO NOT REMOVE
+# ============================================================
+
+def load_bodyfat_log():
+    return load_csv(
+        BODYFAT_FILE,
+        [
+            "date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm",
+            "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"
+        ],
+    )
+
+
+def save_bodyfat_estimate(row):
+    df = load_bodyfat_log()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(BODYFAT_FILE, index=False)
+
+
+def bodyfat_outputs(weight_kg, bf_percent, target_bf=10.0):
+    try:
+        weight_kg = float(weight_kg)
+        bf_percent = float(bf_percent)
+        target_bf = float(target_bf)
+        if weight_kg <= 0 or bf_percent <= 0 or target_bf <= 0 or target_bf >= 100:
+            return None, None, None, None
+        fat_mass = weight_kg * (bf_percent / 100)
+        lean_mass = weight_kg - fat_mass
+        target_weight = lean_mass / (1 - target_bf / 100)
+        fat_to_lose = max(weight_kg - target_weight, 0)
+        return fat_mass, lean_mass, target_weight, fat_to_lose
+    except Exception:
+        return None, None, None, None
+
+
+def safe_kg(value):
+    if value is None:
+        return "No data"
+    try:
+        return f"{float(value):.1f}kg"
+    except Exception:
+        return "No data"
+
+
+def load_targets():
+    return load_csv(TARGETS_FILE, ["target_type", "name", "target_value", "unit", "created_at", "notes"])
+
+
+def save_or_update_target(target_type, name, target_value, unit, notes=""):
+    df = load_targets()
+    if not df.empty:
+        df["target_type"] = df["target_type"].astype(str)
+        df["name"] = df["name"].astype(str)
+        df = df.loc[~((df["target_type"] == str(target_type)) & (df["name"] == str(name)))].copy()
+
+    new_row = {
+        "target_type": target_type,
+        "name": name,
+        "target_value": float(target_value),
+        "unit": unit,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "notes": notes,
+    }
+    pd.concat([df, pd.DataFrame([new_row])], ignore_index=True).to_csv(TARGETS_FILE, index=False)
+
+
+def get_target(target_type, name):
+    df = load_targets()
+    if df.empty:
+        return None
+    matches = df[
+        (df["target_type"].astype(str) == str(target_type)) &
+        (df["name"].astype(str) == str(name))
+    ]
+    if matches.empty:
+        return None
+    try:
+        return float(matches.iloc[-1]["target_value"])
+    except Exception:
+        return None
+
+
+def latest_bodyweight_value():
+    bw_df = load_csv(BODYWEIGHT_FILE, ["date", "bodyweight", "timestamp"])
+    if bw_df.empty:
+        return None
+    bw_df["bodyweight"] = pd.to_numeric(bw_df["bodyweight"], errors="coerce").fillna(0)
+    valid = bw_df[bw_df["bodyweight"] > 0]
+    if valid.empty:
+        return None
+    return float(valid.iloc[-1]["bodyweight"])
+
+
+def latest_bodyfat_mid():
+    bf_df = load_bodyfat_log()
+    if bf_df.empty:
+        return None
+    bf_df["bf_mid"] = pd.to_numeric(bf_df["bf_mid"], errors="coerce").fillna(0)
+    valid = bf_df[bf_df["bf_mid"] > 0]
+    if valid.empty:
+        return None
+    return float(valid.iloc[-1]["bf_mid"])
+
+
+def current_exercise_best_1rm(exercise_name):
+    df = load_log()
+    if df.empty:
+        return 0
+    df = normalise_workout_log(df)
+    ex = df[df["exercise"].astype(str) == str(exercise_name)].copy()
+    if ex.empty:
+        return 0
+    ex["weight"] = pd.to_numeric(ex["weight"], errors="coerce").fillna(0)
+    ex["reps"] = pd.to_numeric(ex["reps"], errors="coerce").fillna(0)
+    ex["estimated_1rm"] = ex.apply(
+        lambda x: estimated_1rm(float(x["weight"]), int(x["reps"])),
+        axis=1,
+    )
+    return float(ex["estimated_1rm"].max())
+
+
+def render_target_bar(title, current, target, unit, lower_is_better=False):
+    if current is None or target is None:
+        st.info(f"{title}: Set a target to begin.")
+        return
+
+    try:
+        current = float(current)
+        target = float(target)
+    except Exception:
+        st.info(f"{title}: Waiting for valid target/data.")
+        return
+
+    if target <= 0:
+        st.info(f"{title}: Target must be above 0.")
+        return
+
+    if lower_is_better:
+        progress = 100 if current <= target else (target / current) * 100
+    else:
+        progress = (current / target) * 100
+
+    progress = max(0, min(progress, 100))
+
+    st.markdown(
+        f"""
+        <div class="mission-card">
+            <div class="mission-title">{title}</div>
+            <div class="progress-track">
+                <div class="progress-fill" style="--progress:{progress:.1f}%;"></div>
+            </div>
+            <div class="progress-label">{current:.1f}{unit} / {target:.1f}{unit} ({progress:.0f}%)</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def encode_image_for_openai(uploaded_file):
+    data = uploaded_file.getvalue()
+    mime = uploaded_file.type or "image/jpeg"
+    encoded = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime};base64,{encoded}"
+
+
+def encode_uploaded_image(uploaded_file):
+    return encode_image_for_openai(uploaded_file)
+
+
+def _get_openai_client():
+    try:
+        from openai import OpenAI
+    except Exception as e:
+        return None, f"OpenAI package not installed. Add 'openai' to requirements.txt. Error: {e}"
+
+    api_key = None
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+    except Exception:
+        api_key = None
+
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None, "Missing OPENAI_API_KEY. Add it to Streamlit Cloud secrets."
+
+    return OpenAI(api_key=api_key), None
+
+
+def run_ai_bodyfat_estimate(front_photo, back_photo, height_cm, weight_kg, waist_cm, neck_cm, lighting, pump_status, time_of_day, model_name):
+    client, err = _get_openai_client()
+    if err:
+        return None, err
+    if front_photo is None and back_photo is None:
+        return None, "Upload at least one physique photo."
+
+    user_text = f"""
+Estimate male body fat percentage from physique photos for a fitness tracking app.
+Return ONLY valid JSON.
+
+Stats:
+- Height: {height_cm} cm
+- Bodyweight: {weight_kg} kg
+- Waist: {waist_cm if waist_cm and waist_cm > 0 else "Not provided"}
+- Neck: {neck_cm if neck_cm and neck_cm > 0 else "Not provided"}
+- Lighting: {lighting}
+- Pump status: {pump_status}
+- Time of day: {time_of_day}
+
+Do not use waist or neck unless provided. Be conservative with flattering lighting or pump.
+
+JSON schema:
+{{
+  "bf_low": number,
+  "bf_high": number,
+  "bf_mid": number,
+  "confidence": "low" | "medium" | "high",
+  "notes": "short practical explanation",
+  "fat_storage": "short note",
+  "ten_percent_notes": "short note"
+}}
+"""
+
+    content = [{"type": "input_text", "text": user_text}]
+    if front_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_image_for_openai(front_photo)})
+    if back_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_image_for_openai(back_photo)})
+
+    try:
+        response = client.responses.create(model=model_name, input=[{"role": "user", "content": content}])
+        text = getattr(response, "output_text", None) or str(response)
+        data = json.loads(text.strip().replace("```json", "").replace("```", "").strip())
+        for key in ["bf_low", "bf_high", "bf_mid", "confidence", "notes"]:
+            if key not in data:
+                return None, f"AI response missing key: {key}. Raw response: {text[:500]}"
+        return data, None
+    except Exception as e:
+        return None, f"AI estimate failed: {e}"
+
+
+def load_measurements():
+    return load_csv(
+        MEASUREMENTS_FILE,
+        ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm",
+         "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm",
+         "shoulders_cm", "neck_cm", "notes", "timestamp"],
+    )
+
+
+def save_measurements(row):
+    df = load_measurements()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(MEASUREMENTS_FILE, index=False)
+
+
+def latest_measurements():
+    df = load_measurements()
+    if df.empty:
+        return {}
+    return df.iloc[-1].to_dict()
+
+
+def load_physique_ratings():
+    return load_csv(
+        PHYSIQUE_RATING_FILE,
+        ["date", "physique_score", "leanness_score", "symmetry_score",
+         "muscularity_score", "confidence", "weak_points", "improvements",
+         "summary", "timestamp"],
+    )
+
+
+def save_physique_rating(row):
+    df = load_physique_ratings()
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True).to_csv(PHYSIQUE_RATING_FILE, index=False)
+
+
+def run_ai_physique_rating(front_photo, side_photo, back_photo, stats, model_name):
+    client, err = _get_openai_client()
+    if err:
+        return None, err
+    if front_photo is None and side_photo is None and back_photo is None:
+        return None, "Upload at least one physique photo."
+
+    user_text = f"""
+Rate this male physique for an aesthetic fitness app. Do not identify the person.
+Return ONLY valid JSON.
+
+Stats:
+{json.dumps(stats, indent=2)}
+
+JSON schema:
+{{
+  "physique_score": number,
+  "leanness_score": number,
+  "symmetry_score": number,
+  "muscularity_score": number,
+  "confidence": "low" | "medium" | "high",
+  "weak_points": ["short point", "short point", "short point"],
+  "improvements": ["short actionable improvement", "short actionable improvement", "short actionable improvement"],
+  "summary": "short honest summary",
+  "training_priority": ["Chest", "Side delts", "Back width", "Arms", "Legs", "Abs"]
+}}
+
+Scores are out of 15. Be realistic and useful.
+"""
+
+    content = [{"type": "input_text", "text": user_text}]
+    if front_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(front_photo)})
+    if side_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(side_photo)})
+    if back_photo is not None:
+        content.append({"type": "input_image", "image_url": encode_uploaded_image(back_photo)})
+
+    try:
+        response = client.responses.create(model=model_name, input=[{"role": "user", "content": content}])
+        text = getattr(response, "output_text", None) or str(response)
+        data = json.loads(text.strip().replace("```json", "").replace("```", "").strip())
+        for key in ["physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary"]:
+            if key not in data:
+                return None, f"AI response missing key: {key}. Raw response: {text[:500]}"
+        return data, None
+    except Exception as e:
+        return None, f"AI physique rating failed: {e}"
+
+
+def load_custom_plan():
+    return load_csv(CUSTOM_PLAN_FILE, ["workout", "exercise", "sets", "reps", "reason", "day_goal", "plan_name", "timestamp"])
+
+
+def save_ai_custom_plan(ai_plan):
+    rows = []
+    for day in ai_plan.get("days", []):
+        for ex in day.get("exercises", []):
+            rows.append({
+                "workout": day.get("day", ""),
+                "exercise": ex.get("exercise", ""),
+                "sets": ex.get("sets", ""),
+                "reps": ex.get("reps", ""),
+                "reason": ex.get("reason", ""),
+                "day_goal": day.get("goal", ""),
+                "plan_name": ai_plan.get("plan_name", "AI Custom Plan"),
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+    if not rows:
+        return False
+    pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
+    return True
+
+
+def save_fallback_custom_plan(plan):
+    rows = []
+    for workout, exercises in plan.items():
+        for exercise, sets, reps in exercises:
+            rows.append({
+                "workout": workout,
+                "exercise": exercise,
+                "sets": sets,
+                "reps": reps,
+                "reason": "Fallback weak-point aesthetic plan",
+                "day_goal": "Aesthetic development",
+                "plan_name": "Fallback Aesthetic Weakpoint Plan",
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            })
+    pd.DataFrame(rows).to_csv(CUSTOM_PLAN_FILE, index=False)
+
+
+def run_ai_custom_plan_from_physique(rating, measurements, goals, model_name):
+    client, err = _get_openai_client()
+    if err:
+        return None, err
+
+    prompt = f"""
+You are an expert bodybuilding coach making a custom workout plan for an aesthetic-focused lifter.
+
+DO NOT simply repeat the user's current PPPPLA routine.
+Choose exercises from this exercise library:
+{json.dumps(EXERCISE_LIBRARY, indent=2)}
+
+Physique rating:
+{json.dumps(rating, indent=2)}
+
+Measurements:
+{json.dumps(measurements, indent=2)}
+
+Goal:
+{goals}
+
+Create a 6-day split:
+Push 1 - Strength Bias
+Pull 1 - Width Bias
+Push 2 - Hypertrophy Bias
+Pull 2 - Thickness Bias
+Legs
+Aesthetic Weakpoint Day
+
+Each day: 5-8 exercises. Include exercise, sets, reps, reason.
+Return ONLY valid JSON:
+{{
+  "plan_name": "string",
+  "rationale": "short summary",
+  "weekly_focus": ["focus 1", "focus 2", "focus 3"],
+  "days": [
+    {{
+      "day": "Push 1 - Strength Bias",
+      "goal": "short day goal",
+      "exercises": [
+        {{"exercise": "exercise name", "sets": 3, "reps": "8-12", "reason": "why selected"}}
+      ]
+    }}
+  ]
+}}
+"""
+    try:
+        response = client.responses.create(model=model_name, input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}])
+        text = getattr(response, "output_text", None) or str(response)
+        data = json.loads(text.strip().replace("```json", "").replace("```", "").strip())
+        if "days" not in data:
+            return None, f"AI response missing 'days'. Raw: {text[:500]}"
+        return data, None
+    except Exception as e:
+        return None, f"AI custom plan failed: {e}"
+
 st.set_page_config(page_title=APP_TITLE, layout="centered")
 
 st.markdown("""
@@ -1932,14 +2476,14 @@ div[data-testid="stMetric"] { background: rgba(15,23,42,.65); border: 1px solid 
 
 st.markdown("""
 <div class="nw-hero">
-    <div class="nw-hero-title">⚡ Training System</div>
-    <div class="nw-hero-sub">PPPPLA tracker</div>
-    <span class="nw-badge">Push • Pull • Legs • Aesthetics • Cardio</span>
+    <div class="nw-hero-title">⚡ Tyson Training</div>
+    <div class="nw-hero-sub">Nightwing-inspired PPPPLA tracker</div>
+    <span class="nw-badge">Bench Strength • V-Taper • Delts • Cardio • XP System</span>
     <div class="nw-scanline"></div>
 </div>
 """, unsafe_allow_html=True)
 
-page = st.sidebar.radio("Menu", ["Home", "Profile", "Physique", "Measurements", "Today", "Cardio", "Progress", "Goals", "Achievements", "Body Fat", "Bodyweight", "Delete Data", "Routine"])
+page = st.sidebar.radio("Menu", ["Home", "Profile", "Physique", "Measurements", "Today", "Cardio", "Progress", "Goals", "Achievements", "Body Fat", "Bodyweight", "Data Manager", "Delete Data", "Routine"])
 st.markdown(f'<div class="page-transition">⚡ {page} module loaded</div>', unsafe_allow_html=True)
 
 for key in ["just_saved_message", "pr_message", "achievement_message"]:
@@ -2760,6 +3304,165 @@ elif page == "Bodyweight":
         st.metric("Latest bodyweight", f"{bw_df.iloc[-1]['bodyweight']:.1f} kg")
         st.line_chart(bw_df, x="date", y="bodyweight")
         st.dataframe(bw_df.sort_values("date", ascending=False), use_container_width=True)
+
+
+
+elif page == "Data Manager":
+    st.header("📂 Data Manager")
+    st.info("Download backups of your workout data from the server the app is currently running on. This is especially important on Streamlit Cloud because files can disappear after redeploys/restarts.")
+
+    csv_files = [
+        "workout_log.csv",
+        "bodyweight_log.csv",
+        "bodyfat_log.csv",
+        "measurements.csv",
+        "physique_ratings.csv",
+        "custom_workout_plan.csv",
+        "targets.csv",
+        "achievements.csv",
+        "cardio_log.csv",
+        "profile.csv",
+    ]
+
+    st.subheader("Detected Data Files")
+
+    file_rows = []
+    for file in csv_files:
+        path = Path(file)
+        if path.exists():
+            try:
+                size_kb = path.stat().st_size / 1024
+                modified = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                file_rows.append({
+                    "file": file,
+                    "exists": "Yes",
+                    "size_kb": round(size_kb, 2),
+                    "last_modified": modified,
+                })
+            except Exception:
+                file_rows.append({
+                    "file": file,
+                    "exists": "Yes",
+                    "size_kb": "",
+                    "last_modified": "",
+                })
+        else:
+            file_rows.append({
+                "file": file,
+                "exists": "No",
+                "size_kb": "",
+                "last_modified": "",
+            })
+
+    st.dataframe(pd.DataFrame(file_rows), use_container_width=True)
+
+    st.subheader("Download Individual CSV Files")
+
+    any_file = False
+    for file in csv_files:
+        path = Path(file)
+        if path.exists():
+            any_file = True
+            with open(path, "rb") as f:
+                st.download_button(
+                    label=f"⬇️ Download {file}",
+                    data=f,
+                    file_name=file,
+                    mime="text/csv",
+                    key=f"download_{file}",
+                )
+
+    if not any_file:
+        st.warning("No CSV data files exist yet. Log a workout/cardio/bodyweight entry first, then come back here.")
+
+    st.subheader("Full Backup ZIP")
+
+    zip_buffer = BytesIO()
+    files_added = 0
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for file in csv_files:
+            path = Path(file)
+            if path.exists():
+                zip_file.write(path, arcname=file)
+                files_added += 1
+
+        # include a small backup manifest
+        manifest = pd.DataFrame(file_rows).to_csv(index=False)
+        zip_file.writestr("backup_manifest.csv", manifest)
+        files_added += 1
+
+    zip_buffer.seek(0)
+
+    st.download_button(
+        label="🔥 Download Full Training Backup ZIP",
+        data=zip_buffer,
+        file_name=f"tyson_training_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+        mime="application/zip",
+        disabled=(files_added <= 1),
+        key="download_full_backup_zip",
+    )
+
+    st.divider()
+
+    st.subheader("Restore / Import CSV Files")
+    st.warning("Importing a CSV with the same name will replace the existing server file. Download a backup first.")
+
+    uploaded_files = st.file_uploader(
+        "Upload CSV files to restore",
+        type=["csv"],
+        accept_multiple_files=True,
+        help="Upload files like workout_log.csv, bodyfat_log.csv, achievements.csv, etc.",
+    )
+
+    allowed_files = set(csv_files)
+
+    if uploaded_files:
+        st.write("Files ready to import:")
+        for uploaded in uploaded_files:
+            if uploaded.name in allowed_files:
+                st.write(f"✅ {uploaded.name}")
+            else:
+                st.write(f"⚠️ {uploaded.name} — ignored because it is not a recognised app data file.")
+
+        confirm_restore = st.checkbox("I understand this will replace matching CSV files on the app server.")
+
+        if st.button("Restore Uploaded CSV Files", type="primary"):
+            if not confirm_restore:
+                st.error("Tick the confirmation box first.")
+            else:
+                restored = []
+                ignored = []
+                for uploaded in uploaded_files:
+                    if uploaded.name not in allowed_files:
+                        ignored.append(uploaded.name)
+                        continue
+                    data = uploaded.getvalue()
+                    Path(uploaded.name).write_bytes(data)
+                    restored.append(uploaded.name)
+
+                if restored:
+                    st.success("Restored: " + ", ".join(restored))
+                if ignored:
+                    st.warning("Ignored: " + ", ".join(ignored))
+                st.session_state.just_saved_message = "DATA RESTORE COMPLETE"
+                st.rerun()
+
+    st.divider()
+
+    st.subheader("Quick Preview")
+    preview_file = st.selectbox("Preview CSV", csv_files)
+    preview_path = Path(preview_file)
+
+    if preview_path.exists():
+        try:
+            preview_df = pd.read_csv(preview_path)
+            st.caption(f"Showing last 50 rows from {preview_file}")
+            st.dataframe(preview_df.tail(50), use_container_width=True)
+        except Exception as e:
+            st.error(f"Could not preview {preview_file}: {e}")
+    else:
+        st.info(f"{preview_file} does not exist yet.")
 
 
 elif page == "Delete Data":
