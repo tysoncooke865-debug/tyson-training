@@ -58,21 +58,79 @@ def sb_select(table_name):
         return None, str(e)
 
 
-def sb_insert(table_name, row):
+
+def clean_supabase_row(row, table_name):
+    allowed = {
+        "workout_log": ["date", "workout", "exercise", "muscle", "set", "weight", "reps", "estimated_1rm", "volume", "notes", "timestamp"],
+        "bodyweight_log": ["date", "bodyweight", "timestamp"],
+        "cardio_log": ["date", "type", "minutes", "distance_km", "incline", "speed", "calories", "notes", "timestamp"],
+        "bodyfat_log": ["date", "method", "bodyweight", "height_cm", "waist_cm", "neck_cm", "bf_low", "bf_high", "bf_mid", "confidence", "notes", "timestamp"],
+        "measurements": ["date", "bodyweight", "wrist_cm", "forearm_cm", "bicep_cm", "chest_cm", "waist_cm", "hips_cm", "thigh_cm", "calf_cm", "shoulders_cm", "neck_cm", "notes", "timestamp"],
+        "physique_ratings": ["date", "physique_score", "leanness_score", "symmetry_score", "muscularity_score", "confidence", "weak_points", "improvements", "summary", "timestamp"],
+        "custom_workout_plan": ["plan_name", "workout", "exercise", "sets", "reps", "muscle", "reason", "day_goal", "timestamp"],
+        "achievements": ["achievement_id", "name", "description", "date_unlocked"],
+        "targets": ["target_type", "name", "target_value", "unit", "created_at", "notes"],
+        "profile": ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"],
+    }
+
+    clean = {}
+    for k in allowed.get(table_name, row.keys()):
+        if k not in row:
+            continue
+        v = row.get(k)
+        try:
+            if pd.isna(v):
+                v = None
+        except Exception:
+            pass
+        if hasattr(v, "item"):
+            try:
+                v = v.item()
+            except Exception:
+                pass
+        clean[k] = v
+    return clean
+
+
+
+def sb_insert(table_name, row, show_error=False):
+    """
+    Insert a row into Supabase.
+    show_error=True is used by the Data Manager diagnostic button.
+    Returns (ok, error_message).
+    """
     sb = get_supabase_client()
     if sb is None:
-        return False, "Supabase not configured"
+        msg = "Supabase not configured. Check SUPABASE_URL and SUPABASE_KEY in Streamlit Secrets."
+        if show_error:
+            st.error(msg)
+        return False, msg
+
+    clean = clean_supabase_row(row, table_name) if "clean_supabase_row" in globals() else dict(row)
+
     try:
-        clean = {}
-        for k, v in row.items():
+        res = sb.table(table_name).insert(clean).execute()
+
+        if show_error:
+            st.success(f"✅ Supabase insert succeeded: {table_name}")
             try:
-                clean[k] = None if pd.isna(v) else v
+                st.json(res.data)
             except Exception:
-                clean[k] = v
-        sb.table(table_name).insert(clean).execute()
+                st.write(res)
+
         return True, None
+
     except Exception as e:
-        return False, str(e)
+        msg = str(e)
+
+        if show_error:
+            st.error(f"❌ Supabase insert failed for {table_name}")
+            st.code(msg)
+            st.write("Attempted row:")
+            st.json(clean)
+
+        return False, msg
+
 
 
 def sb_delete_matching(table_name, filters):
