@@ -605,19 +605,46 @@ def completed_sets_for_day(df, workout_date, workout):
 def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
     if weight <= 0 or reps <= 0:
         return False, False, 0, 0
+
     df_before = load_log()
     previous_best = get_previous_best_1rm(df_before, exercise, exclude_date=workout_date, exclude_set=set_no)
     current_1rm = estimated_1rm(float(weight), int(reps))
     is_pr = current_1rm > previous_best and previous_best > 0
+
     df = normalise_workout_log(df_before)
     df["date"] = df["date"].astype(str)
     df["workout"] = df["workout"].astype(str)
     df["exercise"] = df["exercise"].astype(str)
     df["set"] = pd.to_numeric(df["set"], errors="coerce").fillna(0).astype(int)
-    mask = ((df["date"] == str(workout_date)) & (df["workout"] == str(workout)) & (df["exercise"] == str(exercise)) & (df["set"] == int(set_no)))
+
+    mask = (
+        (df["date"] == str(workout_date)) &
+        (df["workout"] == str(workout)) &
+        (df["exercise"] == str(exercise)) &
+        (df["set"] == int(set_no))
+    )
+
     muscle = infer_muscle_group(exercise) if "infer_muscle_group" in globals() else MUSCLE_MAP.get(exercise, "Other")
-    sb_row = {"date": str(workout_date), "workout": workout, "exercise": exercise, "muscle": muscle, "set": int(set_no), "weight": float(weight), "reps": int(reps), "estimated_1rm": float(current_1rm), "volume": float(weight) * int(reps), "timestamp": datetime.now().isoformat(timespec="seconds")}
-    csv_row = {"date": str(workout_date), "workout": workout, "exercise": exercise, "set": int(set_no), "weight": float(weight), "reps": int(reps), "timestamp": sb_row["timestamp"]}
+    timestamp = datetime.now().isoformat(timespec="seconds")
+
+    csv_row = {
+        "date": str(workout_date),
+        "workout": str(workout),
+        "exercise": str(exercise),
+        "set": int(set_no),
+        "weight": float(weight),
+        "reps": int(reps),
+        "timestamp": timestamp,
+    }
+
+    supabase_row = {
+        **csv_row,
+        "muscle": str(muscle),
+        "estimated_1rm": float(current_1rm),
+        "volume": float(weight) * int(reps),
+        "notes": "",
+    }
+
     if mask.any():
         old = df.loc[mask].iloc[-1]
         try:
@@ -629,12 +656,26 @@ def save_set_auto(workout_date, workout, exercise, set_no, weight, reps):
         if same_weight and same_reps:
             return False, False, current_1rm, previous_best
         df = df.loc[~mask].copy()
-        sb_delete_matching("workout_log", {"date": str(workout_date), "workout": str(workout), "exercise": str(exercise), "set": int(set_no)})
+        sb_delete_matching("workout_log", {
+            "date": str(workout_date),
+            "workout": str(workout),
+            "exercise": str(exercise),
+            "set": int(set_no),
+        })
+
     df = pd.concat([df, pd.DataFrame([csv_row])], ignore_index=True)
     df.to_csv(LOG_FILE, index=False)
-    sb_insert("workout_log", sb_row)
+
+    ok, err = sb_insert("workout_log", supabase_row)
+    if ok:
+        st.session_state["last_supabase_write"] = f"Inserted {exercise} set {set_no} into workout_log"
+        st.session_state["last_supabase_error"] = ""
+    else:
+        st.session_state["last_supabase_error"] = f"workout_log insert failed: {err}"
+
     check_achievements()
     return True, is_pr, current_1rm, previous_best
+
 
 
 def load_targets():
@@ -2853,6 +2894,8 @@ elif page == "Physique":
 
 elif page == "Today":
     st.header("Today’s Workout")
+    if st.session_state.get("last_supabase_error"):
+        st.error(st.session_state.get("last_supabase_error"))
 
     workout_source = st.radio(
         "Workout plan",
@@ -3371,6 +3414,45 @@ elif page == "Data Manager":
         "cardio_log.csv",
         "profile.csv",
     ]
+
+    st.subheader("Supabase Diagnostics")
+    if supabase_enabled():
+        st.success("Supabase client configured.")
+    else:
+        st.error("Supabase client not configured.")
+
+    if st.session_state.get("last_supabase_write"):
+        st.success(st.session_state.get("last_supabase_write"))
+    if st.session_state.get("last_supabase_error"):
+        st.error(st.session_state.get("last_supabase_error"))
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Test Supabase Insert", type="primary"):
+            test_row = {
+                "date": str(date.today()),
+                "workout": "Supabase Test",
+                "exercise": "Connection Test",
+                "muscle": "Test",
+                "set": 1,
+                "weight": 1,
+                "reps": 1,
+                "estimated_1rm": 1,
+                "volume": 1,
+                "notes": "test insert from app",
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            }
+            sb_insert("workout_log", test_row, show_error=True)
+
+    with col_b:
+        if st.button("Read Supabase Workout Rows"):
+            data, err = sb_select("workout_log")
+            if err:
+                st.error(err)
+            else:
+                st.write(f"Rows found in Supabase workout_log: {len(data)}")
+                if data:
+                    st.dataframe(pd.DataFrame(data).tail(10), use_container_width=True)
 
     st.subheader("Detected Data Files")
 
