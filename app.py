@@ -1,11 +1,25 @@
 """
-EVOFORGE app entrypoint.
+EVOFORGE Streamlit entrypoint.
 
-This Phase 1 modular refactor keeps the current tested Streamlit runtime intact
-while moving the project into a clean multi-file structure. Future changes should
-go into evoforge/modules/* first, then progressively replace legacy/runtime.py.
+Robust version: does not rely on Python package imports working on Streamlit Cloud.
+It runs the preserved app directly from evoforge/legacy/runtime.py.
 """
 
-from evoforge.legacy.runner import run_app
+from pathlib import Path
+import runpy
+import sys
 
-run_app()
+ROOT = Path(__file__).resolve().parent
+RUNTIME = ROOT / "evoforge" / "legacy" / "runtime.py"
+
+# Make local package imports work if you later move modules out of legacy/runtime.py.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+if not RUNTIME.exists():
+    raise FileNotFoundError(
+        "Could not find evoforge/legacy/runtime.py. "
+        "Make sure the evoforge folder was uploaded beside app.py."
+    )
+
+runpy.run_path(str(RUNTIME), run_name="__main__")
