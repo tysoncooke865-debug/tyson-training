@@ -1,8 +1,10 @@
 """
-EVOFORGE Streamlit entrypoint.
+EVOFORGE Streamlit launcher.
 
-Robust to Streamlit Cloud path/layout issues.
-Searches for the preserved runtime in multiple likely locations.
+This project has been split into a modular folder structure.
+For safety, the current working app is preserved in legacy/runtime.py and run
+directly. The modules are ready for progressive migration without breaking
+the deployed app.
 """
 
 from pathlib import Path
@@ -10,26 +12,15 @@ import runpy
 import sys
 
 ROOT = Path(__file__).resolve().parent
+RUNTIME = ROOT / "legacy" / "runtime.py"
 
-for p in [ROOT, ROOT / "evoforge", ROOT / "evoforge" / "legacy"]:
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-candidate_paths = [
-    ROOT / "evoforge" / "legacy" / "runtime.py",
-    ROOT / "legacy" / "runtime.py",
-    ROOT / "runtime.py",
-    ROOT / "tyson_training_targets.py",
-]
-
-runtime_path = next((p for p in candidate_paths if p.exists()), None)
-
-if runtime_path is None:
+if not RUNTIME.exists():
     import streamlit as st
-    st.error("EVOFORGE runtime file was not found.")
-    st.write("Expected one of:")
-    for p in candidate_paths:
-        st.code(str(p))
+    st.error("EVOFORGE runtime file not found.")
+    st.code(str(RUNTIME))
     st.stop()
 
-runpy.run_path(str(runtime_path), run_name="__main__")
+runpy.run_path(str(RUNTIME), run_name="__main__")
