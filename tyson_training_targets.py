@@ -56,7 +56,7 @@ SUPABASE_TABLE_SCHEMAS = {
     "custom_workout_plan": ["plan_name", "workout", "exercise", "sets", "reps", "muscle", "reason", "day_goal", "timestamp"],
     "achievements": ["achievement_id", "name", "description", "date_unlocked"],
     "targets": ["target_type", "name", "target_value", "unit", "created_at", "notes"],
-    "profile": ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "goal", "current_phase", "focus_areas", "onboarding_complete", "created_at"],
+    "profile": ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"],
     "avatar_progression": ["date", "level", "rank", "character_class", "build_type", "strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"],
 }
 
@@ -1017,45 +1017,28 @@ def get_target(target_type, name):
 
 
 def load_profile():
-    columns = [
-        "height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years",
-        "physique_score", "leanness_score", "base_level", "goal", "current_phase",
-        "focus_areas", "onboarding_complete", "created_at"
-    ]
+    columns = ["height_cm", "bodyweight_kg", "bench_e1rm", "squat_e1rm", "training_years", "physique_score", "leanness_score", "base_level", "created_at"]
     return df_from_supabase("profile", PROFILE_FILE, columns)
 
 
 
-
-def save_profile(height_cm, bodyweight_kg, bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score, goal="", current_phase="", focus_areas="", onboarding_complete=True):
-    base_level = calculate_starting_level(
-        safe_num(bench_e1rm, 0),
-        safe_num(squat_e1rm, 0),
-        safe_num(training_years, 0),
-        safe_num(physique_score, 0),
-        safe_num(leanness_score, 0),
-    )
+def save_profile(height_cm, bodyweight_kg, bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score):
+    base_level = calculate_starting_level(bench_e1rm, squat_e1rm, training_years, physique_score, leanness_score)
     row = {
-        "height_cm": float(height_cm or 0),
-        "bodyweight_kg": float(bodyweight_kg or 0),
-        "bench_e1rm": float(bench_e1rm or 0),
-        "squat_e1rm": float(squat_e1rm or 0),
-        "training_years": float(training_years or 0),
-        "physique_score": float(physique_score or 0),
-        "leanness_score": float(leanness_score or 0),
-        "base_level": int(base_level),
-        "goal": str(goal or ""),
-        "current_phase": str(current_phase or ""),
-        "focus_areas": str(focus_areas or ""),
-        "onboarding_complete": bool(onboarding_complete),
+        "height_cm": height_cm,
+        "bodyweight_kg": bodyweight_kg,
+        "bench_e1rm": bench_e1rm,
+        "squat_e1rm": squat_e1rm,
+        "training_years": training_years,
+        "physique_score": physique_score,
+        "leanness_score": leanness_score,
+        "base_level": base_level,
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
     ok, err = sb_insert("profile", row)
     store_supabase_result("profile", ok, err)
     pd.DataFrame([row]).to_csv(PROFILE_FILE, index=False)
-    clear_data_cache()
     return base_level
-
 
 
 
@@ -1198,6 +1181,238 @@ def render_target_bar(title, current, target, unit, lower_is_better=False):
         """,
         unsafe_allow_html=True,
     )
+
+
+
+
+# ============================================================
+# AVATAR IMAGE ASSETS / EVOLUTION SYSTEM
+# ============================================================
+
+AVATAR_ASSET_DIR = Path("avatar_assets")
+
+AVATAR_ASSETS = {
+    "aesthetic": {
+        1: AVATAR_ASSET_DIR / "aesthetic_stage_1.png",
+        2: AVATAR_ASSET_DIR / "aesthetic_stage_2.png",
+        3: AVATAR_ASSET_DIR / "aesthetic_stage_3.png",
+        4: AVATAR_ASSET_DIR / "aesthetic_stage_4.png",
+    },
+    "mass": {
+        1: AVATAR_ASSET_DIR / "mass_stage_1.png",
+        2: AVATAR_ASSET_DIR / "mass_stage_2.png",
+        3: AVATAR_ASSET_DIR / "mass_stage_3.png",
+    },
+    "hybrid": {
+        1: AVATAR_ASSET_DIR / "hybrid_stage_1.png",
+        2: AVATAR_ASSET_DIR / "hybrid_stage_2.png",
+        3: AVATAR_ASSET_DIR / "hybrid_stage_3.png",
+    },
+}
+
+
+def img_to_base64(path):
+    try:
+        path = Path(path)
+        if not path.exists():
+            return ""
+        return base64.b64encode(path.read_bytes()).decode("utf-8")
+    except Exception:
+        return ""
+
+
+def get_avatar_stage(level):
+    level = int(level)
+    if level >= 75:
+        return 4
+    if level >= 50:
+        return 3
+    if level >= 25:
+        return 2
+    return 1
+
+
+def get_branch_stage(branch, level):
+    level = int(level)
+    branch = str(branch).lower()
+    if branch == "aesthetic":
+        return get_avatar_stage(level)
+    if level >= 75:
+        return 3
+    if level >= 50:
+        return 2
+    return 1
+
+
+def determine_avatar_branch(stats):
+    strength = safe_num(stats.get("strength_score"), 0)
+    size = safe_num(stats.get("size_score"), 0)
+    conditioning = safe_num(stats.get("conditioning_score"), 0)
+    aesthetic = safe_num(stats.get("aesthetic_score"), 0)
+
+    if size >= max(aesthetic, conditioning) and strength >= 55 and size >= 55:
+        return "mass"
+    if conditioning >= 55 and strength >= 45:
+        return "hybrid"
+    return "aesthetic"
+
+
+def branch_display_name(branch):
+    return {
+        "aesthetic": "💎 Aesthetic",
+        "mass": "🦍 Mass Monster",
+        "hybrid": "⚡ Hybrid Athlete",
+    }.get(str(branch).lower(), "💎 Aesthetic")
+
+
+def evolution_name(branch, level):
+    level = int(level)
+    branch = str(branch).lower()
+    if branch == "mass":
+        if level >= 75: return "Titan Form"
+        if level >= 50: return "Mass Monster"
+        if level >= 25: return "Iron Bulk"
+        return "Cyber Recruit"
+    if branch == "hybrid":
+        if level >= 75: return "Apex Hybrid"
+        if level >= 50: return "Tactical Athlete"
+        if level >= 25: return "Hybrid Rookie"
+        return "Cyber Recruit"
+    if level >= 90: return "True Adam"
+    if level >= 75: return "Chad-Lite"
+    if level >= 50: return "Elite Aesthetic"
+    if level >= 25: return "Rising Aesthetic"
+    return "Cyber Recruit"
+
+
+def avatar_asset_for_stats(stats):
+    branch = determine_avatar_branch(stats)
+    level = int(stats.get("level", 1))
+    stage = get_branch_stage(branch, level)
+    path = AVATAR_ASSETS.get(branch, {}).get(stage)
+    if path is None or not Path(path).exists():
+        path = AVATAR_ASSETS["aesthetic"][1]
+    return branch, stage, path
+
+
+def next_evolution_info(branch, stats):
+    level = int(stats.get("level", 1))
+    bench = safe_num(stats.get("bench_e1rm"), 0)
+    bf = stats.get("bf_mid", None)
+    bf_val = safe_num(bf, 99) if bf is not None else None
+    total_sets = int(workout_summary(load_log()).get("total_sets", 0))
+
+    if level < 25:
+        target_level, target_name = 25, "First Evolution"
+    elif level < 50:
+        target_level, target_name = 50, "Elite Form"
+    elif level < 75:
+        target_level, target_name = 75, "Advanced Form"
+    elif level < 90:
+        target_level, target_name = 90, "Legendary Form"
+    else:
+        target_level, target_name = 100, "True Final Form"
+
+    reqs = [("Level", level, target_level, level >= target_level)]
+    if branch == "mass":
+        target_bench = 120 if level >= 75 else 100
+        target_sets = 250 if level >= 75 else 100
+        reqs += [("Bench", bench, target_bench, bench >= target_bench), ("Total Sets", total_sets, target_sets, total_sets >= target_sets)]
+    elif branch == "hybrid":
+        cardio = get_cardio_stats()
+        minutes = safe_num(cardio.get("minutes", 0), 0)
+        target_bench = 100 if level >= 50 else 90
+        target_minutes = 300 if level >= 50 else 100
+        reqs += [("Bench", bench, target_bench, bench >= target_bench), ("Cardio Minutes", minutes, target_minutes, minutes >= target_minutes)]
+    else:
+        target_bench = 100 if level < 75 else 110
+        target_bf = 12 if level < 75 else 10
+        reqs.append(("Bench", bench, target_bench, bench >= target_bench))
+        reqs.append(("Body Fat", bf_val or 0, target_bf, (bf_val is not None and bf_val <= target_bf)))
+    return target_name, target_level, reqs
+
+
+def render_avatar_image_panel(stats, compact=False):
+    branch, stage, path = avatar_asset_for_stats(stats)
+    img64 = img_to_base64(path)
+    if not img64:
+        st.warning("Avatar image not found. Make sure avatar_assets folder is deployed.")
+        return
+
+    level = int(stats.get("level", 1))
+    evo = evolution_name(branch, level)
+    branch_name = branch_display_name(branch)
+    rank = str(stats.get("rank", rank_name(level)))
+    weak = str(stats.get("weak_point_focus", "Balanced"))
+    compact_class = "avatar-home-compact" if compact else ""
+
+    st.markdown(
+        f"""
+        <div class="avatar-showcase {compact_class}">
+            <div class="avatar-showcase-bg"></div>
+            <div class="avatar-showcase-particles"></div>
+            <div class="avatar-showcase-inner">
+                <div class="avatar-image-wrap stage-{stage} branch-{branch}">
+                    <div class="avatar-aura"></div>
+                    <img class="avatar-character-img" src="data:image/png;base64,{img64}" />
+                </div>
+                <div class="avatar-showcase-info">
+                    <div class="avatar-kicker">CURRENT FORM</div>
+                    <div class="avatar-showcase-title">{evo}</div>
+                    <div class="avatar-showcase-sub">{branch_name} • Level {level}</div>
+                    <div class="avatar-showcase-pill-row">
+                        <span>{rank}</span>
+                        <span>Focus: {weak}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_next_evolution_card(stats):
+    branch, stage, path = avatar_asset_for_stats(stats)
+    target_name, target_level, reqs = next_evolution_info(branch, stats)
+
+    st.markdown(
+        f"""
+        <div class="next-evo-card">
+            <div class="next-evo-top">
+                <div>
+                    <div class="avatar-kicker">NEXT EVOLUTION</div>
+                    <div class="next-evo-title">🔒 {target_name}</div>
+                </div>
+                <div class="next-evo-level">LVL {target_level}</div>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    for label, current, target, complete in reqs:
+        if label == "Body Fat":
+            current_label = f"{current:.1f}%" if current else "No scan"
+            target_label = f"{target:.1f}%"
+            progress = 100 if complete else (max(0, min((target / current) * 100, 100)) if current else 0)
+        else:
+            current_label = f"{current:.1f}" if isinstance(current, float) else str(int(current))
+            target_label = f"{target:.1f}" if isinstance(target, float) else str(int(target))
+            progress = max(0, min((safe_num(current, 0) / safe_num(target, 1)) * 100, 100))
+        icon = "✅" if complete else "⬜"
+        st.markdown(
+            f"""
+            <div class="evo-req-row">
+                <div class="evo-req-label">{icon} {label}</div>
+                <div class="evo-req-value">{current_label} / {target_label}</div>
+            </div>
+            <div class="avatar-track evo-track">
+                <div class="avatar-fill" style="--avatar-progress:{progress}%;"></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 
@@ -1412,6 +1627,7 @@ def calculate_avatar_stats():
         "squat_e1rm": float(squat),
         "bodyweight": float(bodyweight),
         "bf_mid": bf_mid,
+        "avatar_branch": determine_avatar_branch({"strength_score": int(strength_score), "size_score": int(size_score), "conditioning_score": int(conditioning_score), "aesthetic_score": int(aesthetic_score)}),
     }
 
 
@@ -3167,161 +3383,6 @@ Return ONLY valid JSON:
         return None, f"AI custom plan failed: {e}"
 
 
-
-# ============================================================
-# ONBOARDING / PROFILE CALIBRATION
-# ============================================================
-
-def profile_is_complete():
-    profile = load_profile()
-    if profile.empty:
-        return False
-
-    latest = profile.iloc[-1]
-
-    # New profile format
-    if "onboarding_complete" in latest:
-        val = latest.get("onboarding_complete", False)
-        if str(val).lower() in ["true", "1", "yes", "complete"]:
-            return True
-
-    # Backward compatibility: old profile counts as complete if it has a useful base level or stats.
-    try:
-        if float(latest.get("base_level", 0)) > 1:
-            return True
-    except Exception:
-        pass
-
-    try:
-        if float(latest.get("height_cm", 0)) > 0 and float(latest.get("bodyweight_kg", 0)) > 0:
-            return True
-    except Exception:
-        pass
-
-    return False
-
-
-def should_show_onboarding():
-    if st.session_state.get("force_onboarding", False):
-        return True
-    return not profile_is_complete()
-
-
-def detect_onboarding_defaults():
-    summary = workout_summary(load_log())
-    latest_bw = latest_bodyweight_value()
-    latest_bf = latest_bodyfat_mid()
-
-    bench = current_exercise_best_1rm("Barbell Bench Press (Strength)")
-    if bench <= 0:
-        bench = max(
-            current_exercise_best_1rm("Barbell Bench Press"),
-            current_exercise_best_1rm("Paused Barbell Bench Press"),
-        )
-
-    squat = current_exercise_best_1rm("Barbell Back Squat")
-
-    physique = latest_physique_rating_values() if "latest_physique_rating_values" in globals() else {}
-
-    profile = load_profile()
-    latest_profile = profile.iloc[-1].to_dict() if not profile.empty else {}
-
-    return {
-        "height_cm": safe_num(latest_profile.get("height_cm", 183.5), 183.5),
-        "bodyweight_kg": safe_num(latest_profile.get("bodyweight_kg", latest_bw or summary.get("latest_bw", 77.0)), latest_bw or 77.0),
-        "bench_e1rm": safe_num(latest_profile.get("bench_e1rm", bench), bench),
-        "squat_e1rm": safe_num(latest_profile.get("squat_e1rm", squat), squat),
-        "training_years": safe_num(latest_profile.get("training_years", 3), 3),
-        "physique_score": safe_num(latest_profile.get("physique_score", physique.get("physique_score", 9)), 9),
-        "leanness_score": safe_num(latest_profile.get("leanness_score", physique.get("leanness_score", 8)), 8),
-        "bodyfat": latest_bf,
-        "goal": str(latest_profile.get("goal", "Get leaner while maintaining strength") or "Get leaner while maintaining strength"),
-        "current_phase": str(latest_profile.get("current_phase", "Cut") or "Cut"),
-        "focus_areas": str(latest_profile.get("focus_areas", "Upper chest, side delts, lat width, abs") or "Upper chest, side delts, lat width, abs"),
-    }
-
-
-def render_onboarding_screen():
-    defaults = detect_onboarding_defaults()
-
-    st.markdown("""
-    <div class="onboarding-shell">
-        <div class="onboarding-badge">PROFILE CALIBRATION</div>
-        <div class="onboarding-title">Set up Tyson Training</div>
-        <div class="onboarding-subtitle">
-            Existing workout, bodyweight, body fat and PR data has been detected and pre-filled.
-            Confirm it once so levels, avatar stats and AI coaching are calibrated properly.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    detected = {
-        "Detected bodyweight": f"{defaults['bodyweight_kg']:.1f}kg",
-        "Detected bench e1RM": f"{defaults['bench_e1rm']:.1f}kg",
-        "Detected squat e1RM": f"{defaults['squat_e1rm']:.1f}kg",
-        "Detected body fat": f"{defaults['bodyfat']:.1f}%" if defaults["bodyfat"] else "No body fat log yet",
-    }
-
-    cols = st.columns(4)
-    for i, (label, value) in enumerate(detected.items()):
-        with cols[i]:
-            compact_metric(label, value, "from existing data")
-
-    st.divider()
-
-    with st.form("onboarding_profile_form"):
-        st.subheader("Confirm your profile")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            height_cm = st.number_input("Height (cm)", min_value=120.0, max_value=230.0, value=float(defaults["height_cm"]), step=0.5)
-            bodyweight_kg = st.number_input("Current bodyweight (kg)", min_value=35.0, max_value=180.0, value=float(defaults["bodyweight_kg"]), step=0.1)
-            bench_e1rm = st.number_input("Bench estimated 1RM (kg)", min_value=0.0, max_value=300.0, value=float(defaults["bench_e1rm"]), step=2.5)
-            squat_e1rm = st.number_input("Squat estimated 1RM (kg)", min_value=0.0, max_value=400.0, value=float(defaults["squat_e1rm"]), step=2.5)
-
-        with c2:
-            training_years = st.number_input("Training age (years)", min_value=0.0, max_value=20.0, value=float(defaults["training_years"]), step=0.5)
-            physique_score = st.slider("Current physique score /15", 1, 15, int(max(1, min(defaults["physique_score"], 15))))
-            leanness_score = st.slider("Current leanness score /15", 1, 15, int(max(1, min(defaults["leanness_score"], 15))))
-            current_phase = st.selectbox(
-                "Current phase",
-                ["Cut", "Maintain", "Lean Bulk", "Bulk", "Recomp"],
-                index=["Cut", "Maintain", "Lean Bulk", "Bulk", "Recomp"].index(defaults["current_phase"]) if defaults["current_phase"] in ["Cut", "Maintain", "Lean Bulk", "Bulk", "Recomp"] else 0,
-            )
-
-        goal = st.text_input("Main goal", value=defaults["goal"])
-        focus_areas = st.text_input("Focus areas", value=defaults["focus_areas"])
-
-        submitted = st.form_submit_button("Save Profile & Enter App", type="primary", use_container_width=True)
-
-    if submitted:
-        level = save_profile(
-            height_cm=height_cm,
-            bodyweight_kg=bodyweight_kg,
-            bench_e1rm=bench_e1rm,
-            squat_e1rm=squat_e1rm,
-            training_years=training_years,
-            physique_score=physique_score,
-            leanness_score=leanness_score,
-            goal=goal,
-            current_phase=current_phase,
-            focus_areas=focus_areas,
-            onboarding_complete=True,
-        )
-        st.session_state.force_onboarding = False
-        st.session_state.just_saved_message = f"PROFILE CALIBRATED — LEVEL {level}"
-        clear_data_cache()
-        st.rerun()
-
-    with st.expander("Already set up?"):
-        st.write("You can skip this if your profile is already correct. Your existing workout data will not be deleted.")
-        if st.button("Skip for now", use_container_width=True):
-            st.session_state.force_onboarding = False
-            st.session_state.just_saved_message = "ONBOARDING SKIPPED"
-            st.rerun()
-
-
-
 # ============================================================
 # UI HELPERS
 # ============================================================
@@ -3766,7 +3827,7 @@ st.markdown("""
 # ============================================================
 
 PRIMARY_PAGES = ["Home", "Today", "Avatar", "Progress", "Physique", "Cardio", "Goals", "Data Manager"]
-MORE_PAGES = ["Profile", "Onboarding", "Measurements", "Achievements", "Body Fat", "Bodyweight", "Routine", "Delete Data"]
+MORE_PAGES = ["Profile", "Measurements", "Achievements", "Body Fat", "Bodyweight", "Routine", "Delete Data"]
 ALL_PAGES = PRIMARY_PAGES + MORE_PAGES
 
 if "active_page" not in st.session_state:
@@ -3865,12 +3926,6 @@ if PERFORMANCE_MODE:
 
 ui_toast_area()
 
-# Show onboarding once if profile is missing, or when manually re-running it.
-if should_show_onboarding() and page != "Data Manager":
-    render_onboarding_screen()
-    st.stop()
-
-
 df = load_log()
 
 # Unlock any achievements already earned from existing data/profile.
@@ -3882,6 +3937,13 @@ if "achievements_checked_this_session" not in st.session_state:
 if page == "Home":
     page_hero("Command Centre", "Your daily training cockpit — strength, progress, rank and system status.", "Command OS")
     summary = workout_summary(df)
+    try:
+        home_avatar_stats = calculate_avatar_stats()
+        render_avatar_image_panel(home_avatar_stats, compact=True)
+        render_next_evolution_card(home_avatar_stats)
+    except Exception:
+        pass
+
     st.markdown("### Snapshot")
     m1, m2, m3, m4 = st.columns(4)
     with m1:
@@ -3968,10 +4030,6 @@ if page == "Home":
 
 
 elif page == "Profile":
-    if st.button("Re-run Onboarding / Recalibrate Profile", type="secondary"):
-        st.session_state.force_onboarding = True
-        st.rerun()
-
     page_hero("Athlete Profile", "Set your baseline stats so levels reflect your current physique.", "Profile")
     st.info("Set your starting level from your current real-world stats, so you don't start at Level 1.")
 
@@ -4009,12 +4067,6 @@ elif page == "Profile":
     st.write("☀️ Level 100: True Adam")
 
 
-
-
-elif page == "Onboarding":
-    page_hero("Profile Onboarding", "Re-run profile calibration without deleting any existing data.", "Calibration")
-    st.session_state.force_onboarding = True
-    render_onboarding_screen()
 
 
 elif page == "Measurements":
@@ -4340,117 +4392,102 @@ elif page == "Cardio":
 
 
 elif page == "Avatar":
-    page_hero("AI Avatar Progression", "Your physique as a game character — class, build, stats and next evolution.", "RPG Mode")
+    page_hero("AI Avatar Progression", "Your real training unlocks RPG forms, branches and next evolutions.", "RPG Mode")
 
     stats = calculate_avatar_stats()
-    stage = avatar_stage(stats["level"])
+    branch, stage, avatar_path = avatar_asset_for_stats(stats)
+    stats["avatar_branch"] = branch
 
-    st.markdown(
-        f"""
-        <div class="avatar-card">
-            <div class="avatar-glow"></div>
-            <div class="avatar-main">
-                <div class="avatar-sigil">🧬</div>
-                <div>
-                    <div class="avatar-name">TYSON</div>
-                    <div class="avatar-class">{stats['character_class']}</div>
-                    <div class="avatar-rank">{stage} • Level {stats['level']}</div>
-                </div>
-            </div>
-            <div class="avatar-build">
-                <span>{stats['build_type']}</span>
-                <span>Focus: {stats['weak_point_focus']}</span>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    render_avatar_image_panel(stats, compact=False)
+
+    st.divider()
 
     c1, c2 = st.columns([1, 1])
 
     with c1:
-        st.caption("Avatar scores are blended from strength, AI physique ratings, logs and measurements — they won’t show 0 just because a category has limited app history.")
         st.subheader("Character Stats")
-        render_avatar_stat("Strength", stats["strength_score"])
-        render_avatar_stat("Size", stats["size_score"])
-        render_avatar_stat("Leanness", stats["leanness_score"])
-        render_avatar_stat("Conditioning", stats["conditioning_score"])
-        render_avatar_stat("Aesthetic", stats["aesthetic_score"])
+        st.caption("Scores are blended from strength, body fat, physique ratings, cardio and logged training.")
+        render_avatar_stat("⚔️ Strength", stats["strength_score"])
+        render_avatar_stat("🦍 Size", stats["size_score"])
+        render_avatar_stat("💎 Leanness", stats["leanness_score"])
+        render_avatar_stat("❤️ Conditioning", stats["conditioning_score"])
+        render_avatar_stat("🔥 Aesthetic", stats["aesthetic_score"])
 
     with c2:
         st.subheader("Current Build")
-        compact_metric("Class", stats["character_class"], "AI/RPG archetype")
+        compact_metric("Branch", branch_display_name(branch), "auto-detected class path")
+        compact_metric("Form", evolution_name(branch, stats["level"]), f"Stage {stage}")
         compact_metric("Build", stats["build_type"], f"BW: {stats.get('bodyweight', 0):.1f}kg")
         compact_metric("Weak Point", stats["weak_point_focus"], "next focus")
-        compact_metric("Stage", stage, f"Level {stats['level']}")
 
     st.divider()
 
+    render_next_evolution_card(stats)
+
     st.subheader("Avatar Summary")
     latest_avatar = load_avatar_progression()
-    if not latest_avatar.empty and str(latest_avatar.iloc[-1].get("ai_summary", "")).strip():
-        st.write(str(latest_avatar.iloc[-1].get("ai_summary", "")))
+    clean_summary = ""
+    if not latest_avatar.empty and "ai_summary" in latest_avatar.columns:
+        summaries = latest_avatar["ai_summary"].dropna().astype(str)
+        summaries = summaries[~summaries.str.lower().str.contains("test avatar row", na=False)]
+        if not summaries.empty:
+            clean_summary = summaries.iloc[-1]
+
+    if clean_summary:
+        st.write(clean_summary)
     else:
         st.write(default_avatar_summary(stats))
 
-    model_name = st.text_input("AI model for avatar analysis", value="gpt-5.1", key="avatar_model")
+    with st.expander("AI Avatar Coach", expanded=False):
+        model_name = st.text_input("AI model for avatar analysis", value="gpt-5.1", key="avatar_model")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("Generate AI Avatar Analysis", type="primary", use_container_width=True):
+                with st.spinner("Evolving avatar profile..."):
+                    ai_data, err = run_ai_avatar_analysis(stats, model_name)
+                if err:
+                    st.error(err)
+                else:
+                    stats["character_class"] = ai_data.get("character_class", stats["character_class"])
+                    stats["build_type"] = ai_data.get("build_type", stats["build_type"])
+                    stats["weak_point_focus"] = ai_data.get("weak_point_focus", stats["weak_point_focus"])
+                    stats["ai_summary"] = ai_data.get("ai_summary", default_avatar_summary(stats))
+                    st.session_state["last_avatar_ai"] = ai_data
+                    save_avatar_snapshot({k: stats[k] for k in [
+                        "date", "level", "rank", "character_class", "build_type",
+                        "strength_score", "size_score", "leanness_score", "conditioning_score",
+                        "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"
+                    ]})
+                    st.session_state.just_saved_message = "AVATAR EVOLVED"
+                    st.rerun()
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("Generate AI Avatar Analysis", type="primary", use_container_width=True):
-            with st.spinner("Evolving avatar profile..."):
-                ai_data, err = run_ai_avatar_analysis(stats, model_name)
-
-            if err:
-                st.error(err)
-            else:
-                stats["character_class"] = ai_data.get("character_class", stats["character_class"])
-                stats["build_type"] = ai_data.get("build_type", stats["build_type"])
-                stats["weak_point_focus"] = ai_data.get("weak_point_focus", stats["weak_point_focus"])
-                stats["ai_summary"] = ai_data.get("ai_summary", default_avatar_summary(stats))
-                st.session_state["last_avatar_ai"] = ai_data
+        with col_b:
+            if st.button("Save Avatar Snapshot", type="secondary", use_container_width=True):
+                stats["ai_summary"] = default_avatar_summary(stats)
                 save_avatar_snapshot({k: stats[k] for k in [
                     "date", "level", "rank", "character_class", "build_type",
                     "strength_score", "size_score", "leanness_score", "conditioning_score",
                     "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"
                 ]})
-                st.session_state.just_saved_message = "AVATAR EVOLVED"
+                st.session_state.just_saved_message = "AVATAR SNAPSHOT SAVED"
                 st.rerun()
 
-    with col_b:
-        if st.button("Save Avatar Snapshot", type="secondary", use_container_width=True):
-            stats["ai_summary"] = default_avatar_summary(stats)
-            save_avatar_snapshot({k: stats[k] for k in [
-                "date", "level", "rank", "character_class", "build_type",
-                "strength_score", "size_score", "leanness_score", "conditioning_score",
-                "aesthetic_score", "weak_point_focus", "ai_summary", "timestamp"
-            ]})
-            st.session_state.just_saved_message = "AVATAR SNAPSHOT SAVED"
-            st.rerun()
+        ai_last = st.session_state.get("last_avatar_ai", None)
+        if ai_last:
+            st.subheader("Next Evolution")
+            st.info(ai_last.get("next_evolution", "Keep progressing your main weak point."))
+            st.subheader("7-Day Quest")
+            st.success(ai_last.get("training_quest", "Complete your planned sessions and log every set."))
 
-    ai_last = st.session_state.get("last_avatar_ai", None)
-    if ai_last:
-        st.subheader("Next Evolution")
-        st.info(ai_last.get("next_evolution", "Keep progressing your main weak point."))
-        st.subheader("7-Day Quest")
-        st.success(ai_last.get("training_quest", "Complete your planned sessions and log every set."))
-
-    st.subheader("Avatar Timeline")
-    timeline = load_avatar_progression()
-    if timeline.empty:
-        st.info("No avatar snapshots yet. Save one to start your evolution timeline.")
-    else:
-        st.dataframe(timeline.sort_values("timestamp", ascending=False), use_container_width=True)
-
-        chart_df = timeline.copy()
-        for col in ["strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score"]:
-            chart_df[col] = pd.to_numeric(chart_df[col], errors="coerce").fillna(0)
-
-        st.line_chart(
-            chart_df,
-            x="date",
-            y=["strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score"],
-        )
+    with st.expander("Avatar Timeline", expanded=False):
+        timeline = load_avatar_progression()
+        if timeline.empty:
+            st.info("No avatar snapshots yet. Save one to start your evolution timeline.")
+        else:
+            chart_df = timeline.copy()
+            for col in ["strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score"]:
+                chart_df[col] = pd.to_numeric(chart_df[col], errors="coerce").fillna(0)
+            st.line_chart(chart_df, x="date", y=["strength_score", "size_score", "leanness_score", "conditioning_score", "aesthetic_score"])
 
 
 
@@ -5695,55 +5732,153 @@ div[data-testid="stMetric"] {
 """, unsafe_allow_html=True)
 
 
+
+
 st.markdown("""
 <style>
 /* ============================================================
-   ONBOARDING PROFILE CALIBRATION UI
+   EVOLVING CHARACTER IMAGE SYSTEM
 ============================================================ */
 
-.onboarding-shell {
+.avatar-showcase {
     position: relative;
     overflow: hidden;
-    padding: 30px;
     border-radius: 34px;
-    margin: 18px 0 24px 0;
+    margin: 18px 0 26px 0;
+    min-height: 560px;
     background:
-        radial-gradient(circle at 16% 20%, rgba(125,211,252,.26), transparent 34%),
-        linear-gradient(145deg, rgba(15,39,68,.82), rgba(2,6,23,.88));
+        radial-gradient(circle at 50% 12%, rgba(125,211,252,.22), transparent 32%),
+        radial-gradient(circle at 20% 75%, rgba(14,165,233,.13), transparent 38%),
+        linear-gradient(145deg, rgba(15,39,68,.78), rgba(2,6,23,.90));
     border: 1px solid rgba(56,189,248,.22);
-    box-shadow:
-        0 22px 58px rgba(0,0,0,.32),
-        0 0 44px rgba(56,189,248,.20),
-        inset 0 0 30px rgba(56,189,248,.06);
+    box-shadow: 0 24px 64px rgba(0,0,0,.36), 0 0 46px rgba(56,189,248,.18), inset 0 0 32px rgba(56,189,248,.055);
 }
 
-.onboarding-badge {
-    display:inline-flex;
-    padding:8px 12px;
+.avatar-home-compact { min-height: 440px; margin-top: 10px; }
+
+.avatar-showcase-bg {
+    position:absolute;
+    inset:-20%;
+    background: conic-gradient(from 120deg, transparent, rgba(56,189,248,.18), transparent, rgba(14,165,233,.10), transparent);
+    animation: avatarBgSpin 16s linear infinite;
+    opacity:.65;
+}
+
+.avatar-showcase-particles {
+    position:absolute;
+    inset:0;
+    background-image: radial-gradient(circle, rgba(125,211,252,.55) 0 1px, transparent 2px), radial-gradient(circle, rgba(56,189,248,.32) 0 1px, transparent 2px);
+    background-size: 70px 70px, 110px 110px;
+    animation: particlesFloat 9s linear infinite;
+    opacity:.24;
+}
+
+@keyframes avatarBgSpin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+@keyframes particlesFloat { from { background-position:0 0, 0 0; } to { background-position:0 -220px, 0 -330px; } }
+
+.avatar-showcase-inner {
+    position:relative;
+    z-index:2;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:flex-end;
+    min-height:560px;
+    padding: 22px 18px 26px 18px;
+}
+
+.avatar-home-compact .avatar-showcase-inner { min-height:440px; }
+
+.avatar-image-wrap {
+    position:relative;
+    display:flex;
+    justify-content:center;
+    align-items:flex-end;
+    width:100%;
+    min-height:390px;
+    margin-top: 10px;
+}
+
+.avatar-home-compact .avatar-image-wrap { min-height:290px; }
+
+.avatar-character-img {
+    position:relative;
+    z-index:3;
+    max-height:430px;
+    max-width:92%;
+    object-fit:contain;
+    filter: drop-shadow(0 0 18px rgba(56,189,248,.42)) drop-shadow(0 18px 24px rgba(0,0,0,.55));
+    animation: avatarHover 3.4s ease-in-out infinite;
+}
+
+.avatar-home-compact .avatar-character-img { max-height:330px; }
+.branch-mass .avatar-character-img { max-height:450px; }
+.avatar-home-compact .branch-mass .avatar-character-img { max-height:350px; }
+
+.avatar-aura {
+    position:absolute;
+    z-index:1;
+    width:62%;
+    height:70%;
+    bottom:0;
+    border-radius:50%;
+    background: radial-gradient(circle, rgba(56,189,248,.36), rgba(14,165,233,.14) 38%, transparent 68%);
+    filter: blur(18px);
+    animation: avatarAuraPulse 2.8s ease-in-out infinite;
+}
+
+.stage-3 .avatar-aura, .stage-4 .avatar-aura { width:78%; height:84%; opacity:1; }
+.branch-mass .avatar-aura { background: radial-gradient(circle, rgba(56,189,248,.46), rgba(14,165,233,.18) 40%, transparent 70%); }
+
+@keyframes avatarHover { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-10px) scale(1.012); } }
+@keyframes avatarAuraPulse { 0%, 100% { opacity:.48; transform:scale(.98); } 50% { opacity:.95; transform:scale(1.08); } }
+
+.avatar-showcase-info { width:100%; padding:18px 18px 0 18px; text-align:center; }
+.avatar-kicker { color:#7dd3fc; font-size:.78rem; font-weight:950; letter-spacing:.16em; text-transform:uppercase; }
+.avatar-showcase-title { margin-top:6px; color:#eaf7ff; font-size:2.1rem; font-weight:1000; letter-spacing:-.055em; text-shadow:0 0 24px rgba(56,189,248,.30); }
+.avatar-showcase-sub { margin-top:6px; color:#8fb8d6; font-weight:850; font-size:1rem; }
+.avatar-showcase-pill-row { display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin-top:14px; }
+.avatar-showcase-pill-row span {
+    padding:9px 12px;
+    border-radius:999px;
+    color:#eaf7ff;
+    font-weight:850;
+    background:rgba(2,6,23,.58);
+    border:1px solid rgba(56,189,248,.18);
+}
+
+.next-evo-card {
+    padding:20px;
+    border-radius:28px;
+    margin:16px 0 24px 0;
+    background: linear-gradient(145deg, rgba(15,39,68,.70), rgba(2,6,23,.78));
+    border:1px solid rgba(56,189,248,.14);
+    box-shadow:0 14px 38px rgba(0,0,0,.26), 0 0 24px rgba(56,189,248,.10);
+}
+
+.next-evo-top { display:flex; justify-content:space-between; align-items:center; gap:14px; margin-bottom:16px; }
+.next-evo-title { color:#eaf7ff; font-size:1.45rem; font-weight:1000; letter-spacing:-.03em; }
+.next-evo-level {
+    padding:10px 14px;
     border-radius:999px;
     color:#02131f;
-    font-weight:950;
-    background:linear-gradient(90deg, #7dd3fc, #38bdf8);
-    box-shadow:0 0 24px rgba(56,189,248,.26);
-    margin-bottom:16px;
-}
-
-.onboarding-title {
-    color:#eaf7ff;
-    font-size:2.4rem;
-    line-height:1.0;
     font-weight:1000;
-    letter-spacing:-.06em;
-    text-shadow:0 0 26px rgba(56,189,248,.34);
+    background:linear-gradient(90deg, #7dd3fc, #38bdf8);
+    box-shadow:0 0 22px rgba(56,189,248,.22);
 }
 
-.onboarding-subtitle {
-    color:#8fb8d6;
-    margin-top:10px;
-    max-width:760px;
-    font-size:1.02rem;
-}
+.evo-req-row { display:flex; justify-content:space-between; align-items:center; margin:12px 0 6px 0; color:#eaf7ff; font-weight:900; }
+.evo-req-value { color:#8fb8d6; }
+.evo-track { height:10px !important; margin-bottom:8px; }
 
+@media (max-width: 760px) {
+    .avatar-showcase { min-height: 520px; border-radius: 30px; }
+    .avatar-home-compact { min-height: 410px; }
+    .avatar-showcase-inner { min-height: 520px; padding: 16px 10px 22px 10px; }
+    .avatar-home-compact .avatar-showcase-inner { min-height: 410px; }
+    .avatar-character-img { max-height: 390px; max-width: 98%; }
+    .avatar-home-compact .avatar-character-img { max-height: 300px; }
+    .avatar-showcase-title { font-size:1.65rem; }
+}
 </style>
 """, unsafe_allow_html=True)
-
