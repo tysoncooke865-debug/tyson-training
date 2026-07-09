@@ -1332,6 +1332,23 @@ def next_evolution_info(branch, stats):
     return target_name, target_level, reqs
 
 
+
+def avatar_inline_stat(label, value, icon):
+    value = int(max(0, min(safe_num(value, 0), 100)))
+    return f"""
+        <div class="avatar-inline-stat">
+            <div class="avatar-inline-stat-top">
+                <span>{icon} {label}</span>
+                <b>{value}</b>
+            </div>
+            <div class="avatar-inline-track">
+                <div class="avatar-inline-fill" style="--inline-progress:{value}%;"></div>
+            </div>
+        </div>
+    """
+
+
+
 def render_avatar_image_panel(stats, compact=False):
     branch, stage, path = avatar_asset_for_stats(stats)
     img64 = img_to_base64(path)
@@ -1346,23 +1363,38 @@ def render_avatar_image_panel(stats, compact=False):
     weak = str(stats.get("weak_point_focus", "Balanced"))
     compact_class = "avatar-home-compact" if compact else ""
 
+    stat_html = "".join([
+        avatar_inline_stat("Strength", stats.get("strength_score", 0), "⚔️"),
+        avatar_inline_stat("Size", stats.get("size_score", 0), "🦍"),
+        avatar_inline_stat("Leanness", stats.get("leanness_score", 0), "💎"),
+        avatar_inline_stat("Conditioning", stats.get("conditioning_score", 0), "❤️"),
+        avatar_inline_stat("Aesthetic", stats.get("aesthetic_score", 0), "🔥"),
+    ])
+
     st.markdown(
         f"""
         <div class="avatar-showcase {compact_class}">
             <div class="avatar-showcase-bg"></div>
             <div class="avatar-showcase-particles"></div>
-            <div class="avatar-showcase-inner">
+
+            <div class="avatar-showcase-grid">
                 <div class="avatar-image-wrap stage-{stage} branch-{branch}">
                     <div class="avatar-aura"></div>
                     <img class="avatar-character-img" src="data:image/png;base64,{img64}" />
                 </div>
-                <div class="avatar-showcase-info">
+
+                <div class="avatar-side-panel">
                     <div class="avatar-kicker">CURRENT FORM</div>
                     <div class="avatar-showcase-title">{evo}</div>
                     <div class="avatar-showcase-sub">{branch_name} • Level {level}</div>
-                    <div class="avatar-showcase-pill-row">
+
+                    <div class="avatar-showcase-pill-row side-pills">
                         <span>{rank}</span>
                         <span>Focus: {weak}</span>
+                    </div>
+
+                    <div class="avatar-inline-stats">
+                        {stat_html}
                     </div>
                 </div>
             </div>
@@ -1370,6 +1402,7 @@ def render_avatar_image_panel(stats, compact=False):
         """,
         unsafe_allow_html=True,
     )
+
 
 
 def render_next_evolution_card(stats):
@@ -4402,10 +4435,7 @@ elif page == "Avatar":
 
     st.divider()
 
-    c1, c2 = st.columns([1, 1])
-
-    with c1:
-        st.subheader("Character Stats")
+    with st.expander("Detailed Character Stats", expanded=False):
         st.caption("Scores are blended from strength, body fat, physique ratings, cardio and logged training.")
         render_avatar_stat("⚔️ Strength", stats["strength_score"])
         render_avatar_stat("🦍 Size", stats["size_score"])
@@ -4413,11 +4443,12 @@ elif page == "Avatar":
         render_avatar_stat("❤️ Conditioning", stats["conditioning_score"])
         render_avatar_stat("🔥 Aesthetic", stats["aesthetic_score"])
 
-    with c2:
-        st.subheader("Current Build")
+    c1, c2, c3 = st.columns(3)
+    with c1:
         compact_metric("Branch", branch_display_name(branch), "auto-detected class path")
-        compact_metric("Form", evolution_name(branch, stats["level"]), f"Stage {stage}")
+    with c2:
         compact_metric("Build", stats["build_type"], f"BW: {stats.get('bodyweight', 0):.1f}kg")
+    with c3:
         compact_metric("Weak Point", stats["weak_point_focus"], "next focus")
 
     st.divider()
@@ -5882,3 +5913,172 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+/* ============================================================
+   AVATAR SIDE STATS PANEL
+============================================================ */
+
+.avatar-showcase {
+    min-height: 520px !important;
+}
+
+.avatar-showcase-grid {
+    position:relative;
+    z-index:2;
+    display:grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(280px, .95fr);
+    gap: 18px;
+    align-items:center;
+    min-height: 520px;
+    padding: 22px;
+}
+
+.avatar-home-compact .avatar-showcase-grid {
+    min-height: 420px;
+}
+
+.avatar-showcase-grid .avatar-image-wrap {
+    min-height: 460px;
+    margin-top:0;
+}
+
+.avatar-home-compact .avatar-showcase-grid .avatar-image-wrap {
+    min-height: 360px;
+}
+
+.avatar-side-panel {
+    position:relative;
+    z-index:4;
+    padding: 22px;
+    border-radius: 28px;
+    background:
+        linear-gradient(145deg, rgba(2,6,23,.58), rgba(15,39,68,.42));
+    border:1px solid rgba(56,189,248,.16);
+    box-shadow:
+        0 14px 38px rgba(0,0,0,.24),
+        inset 0 0 22px rgba(56,189,248,.04);
+}
+
+.avatar-side-panel .avatar-showcase-title {
+    text-align:left;
+    font-size:1.85rem;
+}
+
+.avatar-side-panel .avatar-showcase-sub {
+    text-align:left;
+}
+
+.side-pills {
+    justify-content:flex-start !important;
+    margin-bottom:16px;
+}
+
+.avatar-inline-stats {
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    margin-top:14px;
+}
+
+.avatar-inline-stat {
+    padding:12px 13px;
+    border-radius:18px;
+    background:rgba(2,6,23,.48);
+    border:1px solid rgba(56,189,248,.12);
+}
+
+.avatar-inline-stat-top {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    color:#eaf7ff;
+    font-weight:900;
+    font-size:.92rem;
+    margin-bottom:8px;
+}
+
+.avatar-inline-stat-top span {
+    color:#dff7ff;
+}
+
+.avatar-inline-stat-top b {
+    color:#7dd3fc;
+}
+
+.avatar-inline-track {
+    position:relative;
+    overflow:hidden;
+    height:9px;
+    border-radius:999px;
+    background:rgba(2,6,23,.88);
+    border:1px solid rgba(56,189,248,.10);
+}
+
+.avatar-inline-fill {
+    width:var(--inline-progress);
+    height:100%;
+    border-radius:999px;
+    background:linear-gradient(90deg, #075985, #38bdf8, #7dd3fc, #38bdf8);
+    background-size:220% 100%;
+    box-shadow:0 0 18px rgba(56,189,248,.50);
+    animation: avatarBar 1.8s linear infinite;
+}
+
+@media (max-width: 900px) {
+    .avatar-showcase {
+        min-height: auto !important;
+    }
+
+    .avatar-showcase-grid {
+        grid-template-columns: 1fr;
+        min-height:auto;
+        padding: 16px;
+        gap: 8px;
+    }
+
+    .avatar-showcase-grid .avatar-image-wrap {
+        min-height: 360px;
+    }
+
+    .avatar-home-compact .avatar-showcase-grid .avatar-image-wrap {
+        min-height: 310px;
+    }
+
+    .avatar-side-panel {
+        padding: 18px;
+    }
+
+    .avatar-side-panel .avatar-showcase-title,
+    .avatar-side-panel .avatar-showcase-sub {
+        text-align:center;
+    }
+
+    .side-pills {
+        justify-content:center !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .avatar-showcase-grid .avatar-image-wrap {
+        min-height: 330px;
+    }
+
+    .avatar-character-img {
+        max-height: 340px !important;
+    }
+
+    .avatar-home-compact .avatar-character-img {
+        max-height: 300px !important;
+    }
+
+    .avatar-side-panel .avatar-showcase-title {
+        font-size:1.55rem;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
